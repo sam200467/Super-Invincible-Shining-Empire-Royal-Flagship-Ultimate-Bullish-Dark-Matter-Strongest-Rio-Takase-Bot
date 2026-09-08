@@ -1,0 +1,430 @@
+@font-face {
+  font-family: "ChenYu";
+  src: url("../../shared/fonts/NotoSansCJKsc-Regular.otf") format("truetype");
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Gakusan Maru";
+  src: url("../../shared/fonts/NotoSansCJKsc-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Noto CJK";
+  src: url("../../shared/fonts/NotoSansCJKsc-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-display: block;
+}
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 2160px;
+  height: 1350px;
+  margin: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+body {
+  font-family: "Noto CJK", sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+#sheet {
+  position: relative;
+  width: 2160px;
+  height: 1350px;
+  overflow: hidden;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  width: 2160px;
+  height: 1350px;
+  object-fit: fill;
+  user-select: none;
+}
+
+.song-summary,
+.chart-rows {
+  position: absolute;
+  z-index: 2;
+}
+
+.song-summary {
+  inset: 0;
+}
+
+.jacket {
+  position: absolute;
+  left: 108px;
+  top: 53px;
+  width: 320px;
+  height: 330px;
+  object-fit: cover;
+}
+
+.single-line {
+  position: absolute;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.song-title,
+.artist,
+.status {
+  top: 55px;
+  height: 110px;
+  color: #000;
+  /* 设计稿使用点（pt）：48pt 在 CSS 中等于 64px。 */
+  font: 700 35px/1.05 "Gakusan Maru", "Noto CJK", sans-serif;
+  -webkit-text-stroke: 8px #fff;
+  paint-order: stroke fill;
+}
+
+.song-title,
+.artist {
+  top: 84px;
+  font-weight: 900;
+  font-synthesis: weight;
+}
+
+.song-title {
+  top: 86px;
+  font-size: 35px;
+}
+
+.song-title::after,
+.artist::after {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  content: attr(data-text);
+  color: #000;
+  font: inherit;
+  text-align: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  -webkit-text-stroke: 2px #000;
+  paint-order: stroke fill;
+}
+
+.song-title {
+  left: 466px;
+  width: 520px;
+}
+
+.artist {
+  left: 1080px;
+  width: 380px;
+  text-align: left;
+}
+
+.status {
+  left: 1540px;
+  width: 760px;
+
+  overflow: visible;
+
+  color: #ffd700;
+  font-family: "ChenYu", "Noto CJK", sans-serif;
+  font-size: 96px;
+  font-weight: 700;
+  font-synthesis: weight;
+  text-align: left;
+  -webkit-text-stroke: 8px #0719ff;
+}
+
+.meta {
+  position: absolute;
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  color: #0719ff;
+  font: 700 35px/1.25 "Gakusan Maru", "Noto CJK", sans-serif;
+  letter-spacing: -1px;
+  white-space: nowrap;
+}
+
+.meta span {
+  margin-right: 15px;
+  color: #5a439b;
+  -webkit-text-stroke: 8px #fff;
+  paint-order: stroke fill;
+}
+
+.version span {
+    margin-right: 15px;
+}
+
+.category span {
+    margin-right: 15px;
+}
+
+.bpm span {
+    margin-right: 15px;
+}
+
+.duration span {
+    margin-right: 15px;
+}
+
+.song-id span {
+    margin-right: 15px;
+}
+
+.release-date span {
+    margin-right: 15px;
+}
+
+.meta strong {
+    min-width: 0;
+    overflow: visible;
+    color: #0719ff;
+    font: inherit;
+    -webkit-text-stroke: 8px #fff;
+    paint-order: stroke fill;
+}
+
+.version { left: 468px; top: 165px; width: 590px; }
+.category { left: 1078px; top: 165px; width: 440px; }
+.bpm { left: 1536px; top: 165px; width: 270px; }
+.duration { left: 1831px; top: 165px; width: 260px; }
+.song-id { left: 468px; top: 245px; width: 220px; }
+.release-date { left: 675px; top: 245px; width: 720px; }
+
+.boss-meta {
+  position: absolute;
+
+  display: flex;
+  align-items: baseline;
+
+  width: max-content;
+  max-width: 1000px;
+
+  font: 700 36px/1.25 "Gakusan Maru", "Noto CJK", sans-serif;
+  letter-spacing: 0;
+
+  white-space: nowrap;
+  overflow: visible;
+
+  -webkit-text-stroke: 8px #fff;
+  paint-order: stroke fill;
+}
+
+.boss-label {
+  color: #5a439b;
+}
+
+.boss-value {
+  margin-left: 12px;
+  color: #0719ff;
+}
+
+.boss-name { left: 1535px; top: 244px; max-width: 540px; }
+.boss-card { left: 468px; top: 320px; max-width: 1040px; }
+
+.boss-level {
+  left: 1535px;
+  top: 323px;
+
+  max-width: none;
+  width: max-content;
+
+  font-size: 36px !important;
+  line-height: 1;
+}
+
+.attribute {
+  left: 1829px;
+  top: 318px;
+  max-width: 465px;
+  height: 45px;
+}
+
+}
+
+.attribute { font-size: 36px; }
+
+.chart-rows {
+  left: 104px;
+  top: 455px;
+  width: 1950px;
+  display: grid;
+  grid-template-rows: repeat(5, 127px);
+  row-gap: 42px;
+}
+
+.chart-row {
+  --row-color: #1aa41c;
+
+  display: grid;
+  width: 100%;
+  height: 127px;
+
+  grid-template-columns:
+    250px
+    110px
+    160px
+    105px
+    140px
+    250px
+    570px
+    210px
+    155px;
+
+  align-items: center;
+
+  color: var(--row-color);
+
+  font: 700 40px/1 "Gakusan Maru", "Noto CJK", sans-serif;
+
+  text-align: center;
+
+  -webkit-text-stroke: 8px #fff;
+  paint-order: stroke fill;
+}
+
+.chart-row.difficulty-basic { --row-color: #1aa41c; }
+.chart-row.difficulty-advanced { --row-color: #f0a101; }
+.chart-row.difficulty-expert { --row-color: #e60c83; }
+.chart-row.difficulty-master { --row-color: #a737d5; }
+.chart-row.difficulty-lunatic { --row-color: #bbafaf; }
+
+.chart-row > div {
+  min-width: 0;
+  overflow: visible;
+  padding: 6px 8px 10px;
+  white-space: nowrap;
+}
+
+.chart-row .difficulty {
+  padding-left: 3px;
+  text-align: left;
+}
+
+.chart-row .constant,
+.chart-row .technical-rank,
+.chart-row .mark,
+.chart-row .score {
+  font: inherit;
+}
+
+.chart-row .designer {
+  font: 700 42px/1.2 "Gakusan Maru", "Noto CJK", sans-serif;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  padding: 6px 8px 10px;
+
+  transform: translateX(58px);
+}
+
+.chart-row .count {
+  display: flex;
+  height: 104px;
+
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  padding: 0;
+
+  font-family: "Gakusan Maru", "Noto CJK", sans-serif;
+  line-height: 0.95;
+}
+
+.count .count-label {
+  font-size: 36px;
+}
+
+.count .count-value {
+  margin-top: 18px;
+  font-size: 36px;
+}
+
+.chart-row.unavailable > div {
+  font-family: "ChenYu", "Noto CJK", sans-serif;
+  font-size: 48px;
+  text-align: center;
+}
+
+#render-error {
+  position: absolute;
+  z-index: 10;
+  display: none;
+  inset: 20px;
+  padding: 30px;
+  color: #b00020;
+  background: rgba(255, 255, 255, 0.95);
+  font: 700 32px/1.4 "Noto CJK", sans-serif;
+}
+
+.chart-row .constant {
+  transform: translateX(22px);
+}
+
+.chart-row .technical-rank {
+  transform: translateX(35px);
+}
+
+.chart-row > .mark:nth-child(4) {
+  transform: translateX(69px);
+}
+
+.chart-row > .mark:nth-child(5) {
+  transform: translateX(73px);
+}
+
+.chart-row .score {
+  transform: translateX(95px);
+}
+
+.chart-row .designer {
+  transform: translateX(58px);
+}
+
+.chart-row > .count:nth-child(8) {
+  transform: translateX(18px);
+}
+
+.chart-row > .count:nth-child(9) {
+  transform: translateX(8px);
+}
+
+.footer-credit {
+  position: absolute;
+  left: 520px;
+  bottom: 12px;
+  z-index: 5;
+
+  display: flex;
+  align-items: center;
+  gap: 80px;   /* 两段话之间的距离 */
+
+  color: #000;
+  font: 700 70px/1 "ChenYu", "Noto CJK", sans-serif;
+
+  white-space: nowrap;
+
+  -webkit-text-stroke: 6px #fff;
+  paint-order: stroke fill;
+}
+
+.footer-credit .credit-name {
+  color: #3bc5ba;
+}

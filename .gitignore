@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+node_modules/
+data/
+*.exe
+*.blob
+*.dat
+*.dat.tmp
+*.log
+ongeki-exe.js
+ongeki-bundle.cjs
+takase-discord-bundle.cjs
+config.json
+ongeki-rating.json
+.npm-cache/

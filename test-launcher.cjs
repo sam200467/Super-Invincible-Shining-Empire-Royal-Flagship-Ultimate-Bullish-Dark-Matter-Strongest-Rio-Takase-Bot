@@ -1,0 +1,13 @@
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const { makeConfig } = require('./start-bot.cjs');
+const env = { DISCORD_APPLICATION_ID:'100000000000000001', DISCORD_BOT_TOKEN:'synthetic-test-token', DISCORD_GUILD_ID:'100000000000000002', DISCORD_CHANNEL_IDS:'100000000000000003, 100000000000000004' };
+const config = makeConfig(env);
+assert.equal(config.channelIds.length, 2);
+assert(path.isAbsolute(config.workDir));
+assert(config.vaultPath.startsWith(config.workDir + path.sep));
+assert.throws(() => makeConfig({...env, DISCORD_BOT_TOKEN:''}), /Missing configuration/);
+assert.throws(() => makeConfig({...env, DISCORD_CHANNEL_IDS:'invalid'}), /17-20 digits/);
+assert.throws(() => makeConfig({...env, DISCORD_PROXY_URL:'socks5:\/\/localhost:1080'}), /Proxy URL/);
+assert.equal(makeConfig({...env, TAKASE_DATA_DIR:'custom-data'}).workDir.endsWith('custom-data'), true);
+console.log('Launcher configuration tests passed.');

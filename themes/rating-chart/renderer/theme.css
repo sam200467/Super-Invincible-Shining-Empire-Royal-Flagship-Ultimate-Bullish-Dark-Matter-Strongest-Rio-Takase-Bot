@@ -1,0 +1,665 @@
+@font-face {
+  font-family: "ChenYu";
+  src: url("../../shared/fonts/NotoSansCJKsc-Regular.otf") format("truetype");
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Noto CJK";
+  src: url("../../shared/fonts/NotoSansCJKsc-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Noto CJK";
+  src: url("../../shared/fonts/NotoSansCJKsc-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Noto Symbols";
+  src: url("../../shared/fonts/NotoSansSymbols2-Regular.ttf") format("truetype");
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Gakusan Maru";
+  src: url("../../shared/fonts/NotoSansCJKsc-Bold.otf") format("opentype");
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Resource Han Rounded";
+  src: url("../../shared/fonts/NotoSansCJKsc-Bold.otf") format("truetype");
+  font-weight: 500;
+  font-display: block;
+}
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 3600px;
+  height: 1800px;
+  margin: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+body {
+  font-family: "Noto CJK", sans-serif;
+}
+
+#sheet {
+  position: relative;
+  width: 3600px;
+  height: 1800px;
+  overflow: hidden;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  width: 3600px;
+  height: 1800px;
+  object-fit: fill;
+  user-select: none;
+}
+
+.player-block,
+.rating-block,
+.footer,
+.generation-time,
+.card-grid {
+  position: absolute;
+  z-index: 2;
+}
+
+.avatar {
+  position: absolute;
+  left: 328px;
+  top: 116px;
+  width: 80px;
+  height: 80px;
+  border: 3px solid rgba(255, 255, 255, 0.95);
+  border-radius: 7px;
+  object-fit: cover;
+  box-shadow: 0 2px 7px rgba(40, 52, 90, 0.38);
+}
+
+.level {
+  position: absolute;
+  left: 432px;
+  top: 116px;
+
+  display: flex;
+  height: 80px;
+  align-items: center;
+
+  color: #173ccf;
+
+  font-family: "Gakusan Maru", "Resource Han Rounded", sans-serif;
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+
+  letter-spacing: 1px;
+  white-space: nowrap;
+
+  /* 最外层白框 */
+  -webkit-text-stroke: 9px #fff;
+  paint-order: stroke fill;
+}
+
+.level::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+
+  display: flex;
+  align-items: center;
+
+  color: #173ccf;
+
+  /* 蓝色本体加粗 */
+  -webkit-text-stroke: 1.5px #173ccf;
+  paint-order: stroke fill;
+}
+
+.outlined-gradient {
+  position: absolute;
+  isolation: isolate;
+  white-space: nowrap;
+
+  color: var(--outline-color, #fff);
+
+  /* 原来 6px 左右的话，可以加粗 */
+  -webkit-text-stroke: var(--outline-width, 8px)
+    var(--outline-color, #fff);
+
+  paint-order: stroke fill;
+}
+
+.outlined-gradient::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  color: transparent;
+  background: var(--fill-gradient);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  -webkit-text-stroke: 1.5px #b51cda;
+  paint-order: stroke fill;
+}
+
+.player-name {
+  left: 610px;
+  top: 116px;
+
+  display: flex;
+  height: 80px;
+  align-items: center;
+
+  max-width: 520px;
+  overflow: hidden;
+
+  --outline-color: #fff;
+  --outline-width: 8px;
+
+  --fill-gradient: linear-gradient(
+    180deg,
+    #d51ff0 0%,
+    #bd20e9 45%,
+    #9417d4 100%
+  );
+
+  font-family: "Gakusan Maru", "Resource Han Rounded", "Noto CJK", sans-serif;
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+
+  letter-spacing: 3px;
+}
+
+.player-name::after {
+  display: flex;
+  align-items: center;
+}
+
+.average {
+  position: absolute;
+  left: 1044px;
+  width: 380px;
+  color: #141414;
+  font: 700 40px/1 "Resource Han Rounded", "Noto CJK", sans-serif;
+  white-space: nowrap;
+  -webkit-text-stroke: 4px #fff;
+  paint-order: stroke fill;
+}
+
+.average-label {
+  display: inline-block;
+  min-width: 112px;
+  color: #173ccf;
+}
+
+.average-number {
+  color: #151515;
+}
+
+.average-b50 { top: 30px; }
+.average-n10 { top: 90px; }
+.average-p50 { top: 150px; }
+
+.rating-separator {
+  position: absolute;
+
+  /* 整组三根横杠左右移动 */
+  left: 1450px;
+
+  top: 72px;
+
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+
+  /* 控制三根横杠的整体跨度 */
+  width: 210px;
+
+  height: 60px;
+  align-items: center;
+
+  /* 三根之间的附加距离 */
+  column-gap: 0;
+}
+
+.rating-separator span {
+  display: block;
+  min-width: 0;
+  color: #111;
+  font: 700 60px/1 "Resource Han Rounded", "Noto CJK", sans-serif;
+  text-align: center;
+  -webkit-text-stroke: 4px #fff;
+  paint-order: stroke fill;
+}
+
+.rating-value { 
+  left: 1700px; 
+  top: 53px; 
+  width: 322px; 
+  text-align: left; 
+
+  --outline-color: #0719ff; 
+  --outline-width: 8px;
+
+  --fill-gradient: linear-gradient(
+    90deg,
+    #ffd700 0%,
+    #0df702 50%,
+    #eb48e1 100%
+  ); 
+
+  font: 700 100px/1 "Resource Han Rounded", "Noto CJK", sans-serif; 
+  letter-spacing: 2px; 
+}
+
+.rating-value::after {
+  -webkit-text-stroke: 0 transparent;
+}
+
+.generation-time { 
+  left: 2200px; 
+  top: 39px; 
+  width: 1500px; 
+
+  /* Generation time: 本体 */
+  color: #111;
+
+  font-family: "Resource Han Rounded", "Noto CJK", sans-serif;
+  font-size: 68px;
+  font-weight: 700;
+  line-height: 1.15;
+
+  letter-spacing: 1px; 
+  text-align: center; 
+  white-space: nowrap; 
+
+  /* P2 那种粗白边 */
+  -webkit-text-stroke: 7px #fff;
+  paint-order: stroke fill;
+} 
+ 
+.generation-time span { 
+  margin-left: 28px;
+
+  /* P2 的青蓝色 */
+  color: #00b8d4;
+
+  /* 关键：日期不要继承前面的白描边 */
+  -webkit-text-stroke: 0 transparent;
+  paint-order: normal;
+}
+
+.card-grid {
+  display: grid;
+  align-content: start;
+}
+
+.best-grid {
+  left: 23px;
+  top: 236px;
+  grid-template-columns: repeat(5, 392px);
+  grid-auto-rows: 95px;
+  column-gap: 22px;
+  row-gap: 22px;
+}
+
+.new-grid {
+  left: 23px;
+  top: 1518px;
+  grid-template-columns: repeat(5, 392px);
+  grid-auto-rows: 95px;
+  column-gap: 22px;
+  row-gap: 29px;
+}
+
+.platinum-grid {
+  left: 2107px;
+  top: 236px;
+  grid-template-columns: repeat(5, 279px);
+  grid-auto-rows: 117px;
+  column-gap: 12px;
+  row-gap: 10px;
+}
+
+.score-card {
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(24, 12, 58, 0.82);
+}
+
+.card-plate {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
+
+.score-card .jacket {
+  position: absolute;
+  z-index: 1;
+  object-fit: cover;
+  background: transparent;
+}
+
+.normal-card .jacket {
+  left: 14px;
+  top: 17px;
+  width: 63px;
+  height: 63px;
+}
+
+.normal-card .rank-number,
+.normal-card .difficulty,
+.normal-card .title,
+.normal-card .score,
+.normal-card .rating-detail,
+.normal-card .rank-icon,
+.normal-card .status-icons {
+  position: absolute;
+  z-index: 2;
+}
+
+.normal-card .rank-number {
+  left: 85px;
+  top: 8px;
+  font: 700 19px/1 "Noto CJK", sans-serif;
+}
+
+.normal-card .difficulty {
+  left: 127px;
+  top: 8px;
+  width: 59px;
+  height: 15px;
+  object-fit: fill;
+}
+
+.normal-card .title {
+  left: 84px;
+  right: 70px;
+  top: 32px;
+  overflow: hidden;
+  color: #fff;
+  font: 700 20px/1.1 "Noto CJK", sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(45, 20, 75, 0.9);
+}
+
+.normal-card .score {
+  left: 84px;
+  top: 62px;
+  font: 700 22px/1 "Noto CJK", sans-serif;
+  letter-spacing: -0.5px;
+}
+
+.normal-card .rating-detail {
+  left: 205px;
+  top: 64px;
+  font: 700 18px/1 "Noto CJK", sans-serif;
+  white-space: nowrap;
+}
+
+.normal-card .rank-icon {
+  right: 11px;
+  bottom: 11px;
+  max-width: 58px;
+  max-height: 25px;
+  object-fit: contain;
+}
+
+.normal-card .status-icons {
+  right: 10px;
+  top: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.normal-card .status-icons img {
+  width: auto;
+  max-width: 59px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.platinum-card .jacket {
+  left: 13px;
+  top: 17px;
+  width: 61px;
+  height: 61px;
+}
+
+.platinum-card .rank-number,
+.platinum-card .difficulty,
+.platinum-card .platinum-star,
+.platinum-card .platinum-values,
+.platinum-card .rating-detail,
+.platinum-card .title {
+  position: absolute;
+  z-index: 2;
+}
+
+.platinum-card .rank-number {
+  left: 84px;
+  top: 8px;
+  font: 700 18px/1 "Noto CJK", sans-serif;
+}
+
+.platinum-card .difficulty {
+  left: 125px;
+  top: 8px;
+  width: 59px;
+  height: 15px;
+}
+
+.platinum-card .platinum-star {
+  right: 15px;
+  top: 7px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font: 700 19px/1 "Noto CJK", sans-serif;
+}
+
+.platinum-card .platinum-star img {
+  width: 17px;
+  height: 17px;
+  object-fit: contain;
+}
+
+.platinum-card .platinum-values {
+  left: 84px;
+  right: 12px;
+  top: 32px;
+  overflow: hidden;
+  font: 700 19px/1 "Noto CJK", sans-serif;
+  white-space: nowrap;
+}
+
+.platinum-card .rating-detail {
+  left: 84px;
+  right: 12px;
+  top: 56px;
+  overflow: hidden;
+  font: 700 17px/1 "Noto CJK", sans-serif;
+  white-space: nowrap;
+}
+
+.platinum-card .title {
+  left: 8px;
+  right: 8px;
+  bottom: 3px;
+  height: 28px;
+  overflow: hidden;
+  color: #fff;
+  font: 700 18px/24px "Noto CJK", sans-serif;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(45, 20, 75, 0.9);
+}
+
+.footer {
+  position: absolute;
+  inset: 0;
+
+  font-family: "Resource Han Rounded", "Noto CJK", sans-serif;
+  font-weight: 700;
+}
+
+
+/* =========================
+   左下：Generated by
+   ========================= */
+
+.generator-name {
+  position: absolute;
+
+  left: 2125px;
+  top: 1520px;
+
+  color: #111;
+
+  font-size: 90px;
+  font-weight: 700;
+  line-height: 1;
+
+  white-space: nowrap;
+
+  /* 粗白色外框 */
+  -webkit-text-stroke: 7px #fff;
+  paint-order: stroke fill;
+}
+
+/* bot 名字 */
+.generator-name span {
+  margin-left: 18px;
+
+  color: #111;
+
+  /* 跟前面的 Generated by 一样 */
+  -webkit-text-stroke: 7px #fff;
+  paint-order: stroke fill;
+
+  letter-spacing: 1px;
+}
+
+
+/* =========================
+   左下第二行：Function designed by
+   ========================= */
+
+.designer-name {
+  position: absolute;
+
+  left: 2125px;
+  top: 1630px;
+
+  color: #111;
+
+  font-size: 85px;
+  font-weight: 700;
+  line-height: 1;
+
+  white-space: nowrap;
+
+  -webkit-text-stroke: 7px #fff;
+  paint-order: stroke fill;
+}
+
+/* DEMO 青色，不要白边 */
+.designer-name span {
+  margin-left: 18px;
+
+  color: #3bc5ba;
+
+  -webkit-text-stroke: 0 transparent;
+  paint-order: stroke fill;
+}
+
+
+/* =========================
+   右下：Total plays count
+   ========================= */
+
+.play-count {
+  position: absolute;
+
+  left: 2950px;
+  top: 1500px;
+
+  color: #0719ff;
+
+  font-size: 48px;
+  font-weight: 700;
+  line-height: 1;
+
+  white-space: nowrap;
+
+  /* 蓝字 + 粗白边 */
+  -webkit-text-stroke: 7px #fff;
+  paint-order: stroke fill;
+}
+
+
+/* =========================
+   右下：Last play time
+   ========================= */
+
+.last-play {
+  position: absolute;
+
+  left: 2950px;
+  top: 1580px;
+
+  width: 650px;
+
+  color: #0719ff;
+
+  font-size: 48px;
+  font-weight: 700;
+  line-height: 1.12;
+
+  white-space: normal;
+
+  -webkit-text-stroke: 7px #fff;
+  paint-order: stroke fill;
+}
+
+.last-play-value {
+  display: flex;
+
+  margin-top: 30px;
+
+  justify-content: flex-start;
+  gap: 40px;
+  white-space: nowrap;
+}
+
+.generator-name,
+.designer-name {
+  font-family: "ChenYu", "Noto CJK", sans-serif;
+}

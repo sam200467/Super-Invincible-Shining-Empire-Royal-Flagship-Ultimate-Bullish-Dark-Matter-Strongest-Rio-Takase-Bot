@@ -1,0 +1,512 @@
+@font-face {
+  font-family: "Noto CJK";
+  src: url("../../shared/fonts/NotoSansCJKsc-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "ChenYu";
+  src: url("../../shared/fonts/NotoSansCJKsc-Regular.otf") format("truetype");
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Noto CJK";
+  src: url("../../shared/fonts/NotoSansCJKsc-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Resource Han Rounded";
+  src: url("../../shared/fonts/NotoSansCJKsc-Bold.otf") format("truetype");
+  font-weight: 500;
+  font-display: block;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  width: 1440px;
+  min-height: 1080px;
+  margin: 0;
+  overflow: hidden;
+  color: #20243e;
+  background: #fff;
+  font-family: "Noto CJK", sans-serif;
+}
+
+#level-sheet {
+  position: relative;
+  width: 1440px;
+  min-height: 1080px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.page-background {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 0;
+  width: calc(100vh + 50px);
+  height: calc(100vw + 50px);
+  object-fit: cover;
+  opacity: 0.92;
+  filter: blur(25px);
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center;
+  user-select: none;
+  pointer-events: none;
+}
+
+.hero {
+  position: relative;
+  z-index: 1;
+  height: 225px;
+  border-bottom: 3px solid rgba(55, 59, 67, 0.18);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 8px 25px rgba(43, 52, 66, 0.1);
+}
+
+/* P1 参考：方形灰边框、黑色 LEVEL 栏、白色等级区，两行均完全居中。 */
+.level-mark {
+  position: absolute;
+  left: 45px;
+  top: 25px;
+  display: grid;
+  width: 160px;
+  height: 175px;
+  overflow: hidden;
+  grid-template-rows: 47px 128px;
+  border: 3px solid #5d5d5d;
+  border-radius: 2px;
+  color: #111;
+  background: #fff;
+  box-shadow: 0 6px 12px rgba(35, 42, 52, 0.18);
+}
+
+.level-mark span,
+.level-mark strong {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.level-mark span {
+  color: #fff;
+  background: linear-gradient(180deg, #313131, #121212);
+  font: 700 35px/1 "Noto CJK", sans-serif;
+  letter-spacing: 1px;
+}
+
+.level-mark strong {
+  padding: 0 5px 3px 0;
+  color: #050505;
+  font: 500 80px/1 "Resource Han Rounded", "Noto CJK", sans-serif;
+  letter-spacing: -3px;
+  transform: translateY(-6px);
+}
+
+.level-mark strong.constant-query {
+  padding-right: 0;
+  font-size: 62px;
+  letter-spacing: -2px;
+}
+
+.level-mark strong.abfb-query {
+  padding-right: 0;
+  font-size: 40px;
+  letter-spacing: -1px;
+}
+
+.hero-copy {
+  position: absolute;
+  left: 235px;
+  top: 30px;
+
+  display: flex;
+  align-items: center;
+  gap: 30px;
+
+  width: 800px;
+}
+
+h1 {
+  margin: 0;
+  color: #2e3040;
+  font: 700 50px/1 "Resource Han Rounded", "Noto CJK", sans-serif;
+  letter-spacing: 1px;
+}
+
+.page-number {
+  margin-top: 3px;
+  color: #716d7e;
+  font: 700 50px/1 "Noto CJK", sans-serif;
+  letter-spacing: 4px;
+}
+
+.player {
+  position: absolute;
+  right: 45px;
+  top: 22px;
+  display: flex;
+  width: 350px;
+  height: 86px;
+  align-items: center;
+  padding: 9px 13px;
+  border: 2px solid rgba(126, 126, 137, 0.2);
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 7px 18px rgba(45, 53, 70, 0.12);
+}
+
+.avatar {
+  width: 64px;
+  height: 64px;
+  flex: none;
+  border: 3px solid #fff;
+  border-radius: 11px;
+  object-fit: cover;
+  background: #e4e4ef;
+}
+
+.player-copy {
+  min-width: 0;
+  margin-left: 14px;
+}
+
+.player-name {
+  width: 240px;
+  overflow: visible;
+
+  color: #b212ee;
+  font: 700 25px/1.2 "Resource Han Rounded", "Noto CJK", sans-serif;
+  white-space: nowrap;
+
+  transform: translateY(-3px);
+
+  text-shadow:
+    1px 1px 0 #ffffff,
+    -1px 1px 0 #ffffff,
+    1px -1px 0 #ffffff,
+    -1px -1px 0 #ffffff;
+}
+
+.player-level {
+  margin-top: px;
+  margin-left: 4px;
+  color: #1134e7;
+  font: 700 25px/1 "Resource Han Rounded", "Noto CJK", sans-serif;
+  letter-spacing: 0;
+
+  text-shadow:
+    1px 1px 0 #ffffff,
+    -1px 1px 0 #ffffff,
+    1px -1px 0 #ffffff,
+    -1px -1px 0 #ffffff;
+}
+
+.summary {
+  position: absolute;
+  left: 235px;
+  right: 45px;
+  bottom: 16px;
+  display: grid;
+  grid-template-columns: repeat(11, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.summary-card {
+  height: 80px;
+  min-width: 0;
+  padding: 8px 3px;
+
+  border: 2px solid rgba(95, 100, 111, 0.12);
+  border-radius: 13px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 3px 9px rgba(52, 58, 70, 0.07);
+}
+
+.summary-value {
+  color: #3f4350;
+  font: 700 28px/1 "Resource Han Rounded", sans-serif;
+}
+
+.summary-label {
+  display: flex;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin-top: 7px;
+  color: #747783;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 24px;
+  text-transform: uppercase;
+}
+
+.summary-card.sss-plus .summary-value { color: #e1568f; }
+.summary-card.sss .summary-value { color: #e1568f; }
+.summary-card.all-break .summary-value { color: #e49b19; }
+.summary-card.full-bell .summary-value { color: #e49b19; }
+.summary-card.all-break-full-bell .summary-value { color: #7657c7; }
+.summary-card.star .summary-value { color: #9b7414; }
+
+.summary-star-icon {
+  width: 21px;
+  height: 21px;
+  object-fit: contain;
+}
+
+.sort-note {
+  visibility: hidden;
+  height: 20px;
+}
+
+.chart-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 1367px;
+  margin: 0 auto;
+  grid-template-columns: repeat(7, 185px);
+  grid-auto-rows: 250px;
+  column-gap: 12px;
+  row-gap: 14px;
+}
+
+.chart-card {
+  position: relative;
+  overflow: hidden;
+  border: 2px solid rgba(79, 83, 96, 0.19);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 6px 14px rgba(46, 52, 65, 0.13);
+}
+
+.chart-card::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 5px;
+  background: var(--difficulty-color, #a742cf);
+}
+
+.difficulty-basic { --difficulty-color: #26a943; }
+.difficulty-advanced { --difficulty-color: #f0a800; }
+.difficulty-expert { --difficulty-color: #e52d83; }
+.difficulty-master { --difficulty-color: #9948ce; }
+.difficulty-lunatic { --difficulty-color: #dc3434; }
+
+.position,
+.platinum-star {
+  position: absolute;
+  top: 7px;
+  z-index: 4;
+  min-width: 45px;
+  padding: 2px 6px;
+  border-radius: 7px;
+  color: #fff;
+  background: rgba(29, 30, 36, 0.82);
+  font: 700 13px/1.3 "Noto CJK", sans-serif;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+}
+
+.position { left: 7px; }
+
+.platinum-star {
+  right: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  color: #fff2a2;
+  background: rgba(119, 76, 13, 0.88);
+  font-size: 14px;
+}
+
+.platinum-star-icon {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+}
+
+.platinum-star-value {
+  color: #fff2a2;
+  font: 700 13px/1 "Noto CJK", sans-serif;
+}
+
+.jacket {
+  display: block;
+  width: 165px;
+  height: 165px;
+  margin: 8px auto 0;
+  border-radius: 7px;
+  object-fit: cover;
+  background: linear-gradient(135deg, #e8e5f2, #c9d7eb);
+}
+
+.difficulty {
+  position: absolute;
+  right: 5px;
+  top: 150px;
+  z-index: 4;
+  width: 80px;
+  height: 21px;
+  object-fit: fill;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.42));
+}
+
+.technical-rank {
+  position: absolute;
+  right: 5px;
+  top: 117px;
+  z-index: 4;
+  width: 60px;
+  height: 30px;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.42));
+}
+
+.achievement {
+  position: absolute;
+  left: 5px;
+  z-index: 4;
+  width: 80px;
+  height: 21px;
+  object-fit: fill;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.32));
+}
+
+.achievement-primary { top: 125px; }
+
+/* FB 永远占用下端的独立槽位，即使没有 AB/FC 也不上移。 */
+.achievement-full-bell { top: 149px; }
+
+.score-row {
+  display: flex;
+  height: 31px;
+  align-items: baseline;
+  gap: 8px;
+  margin: 1px 8px 0;
+}
+
+/* 14.8 */
+.constant { 
+  flex: 1; 
+  color: #6f727b;
+
+  font-family: "Resource Han Rounded", "Noto CJK", sans-serif;
+  font-weight: 700;
+  font-size: 22px;        /* 原来 15px，控制大小 */
+  line-height: 31px;
+
+  text-align: left;
+
+  transform: translate(1px, 1px);
+  /* 第一个：左右
+     第二个：上下 */
+} 
+
+.score { 
+  flex: none; 
+  color: #252632;
+
+  font-family: "Resource Han Rounded", "Noto CJK", sans-serif;
+  font-weight: 700;
+  font-size: 22px;        /* 原来 22px */
+  line-height: 31px;
+
+  text-align: right; 
+  letter-spacing: -1px;
+
+  transform: translate(0px, 1px);
+} 
+
+.score.theory-score { color: #d83c91; }
+
+.title { 
+  width: 173px; 
+  height: 25px; 
+  margin: 0 auto; 
+  overflow: hidden;
+
+  color: #363943;
+
+  font-size: 20px;        /* 原来 16px */
+  font-weight: 700; 
+  line-height: 25px;
+
+  text-align: center; 
+  text-overflow: ellipsis; 
+  white-space: nowrap;
+
+  transform: translate(0px, 3px);
+} 
+
+.chart-card.unplayed {
+  opacity: 0.52;
+  filter: grayscale(0.88) saturate(0.3) brightness(1.12);
+  box-shadow: 0 3px 8px rgba(46, 52, 65, 0.08);
+}
+
+.chart-card.unplayed .score {
+  color: #9997a0;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  z-index: 1;
+
+  text-align: center;
+
+  color: #111;
+  font-family: "ChenYu", "Comic Sans MS", cursive;
+  font-size: 60px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+footer .takase {
+  color: #111;
+  font-weight: 700;
+}
+
+footer .sam {
+  color: #62d4df;
+  font-weight: 700;
+}
+
+#render-error {
+  position: fixed;
+  left: 80px;
+  right: 80px;
+  top: 300px;
+  z-index: 20;
+  display: none;
+  padding: 24px;
+  border: 3px solid #b90027;
+  border-radius: 14px;
+  color: #85001b;
+  background: #fff0f4;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+#render-error.visible { display: block; }

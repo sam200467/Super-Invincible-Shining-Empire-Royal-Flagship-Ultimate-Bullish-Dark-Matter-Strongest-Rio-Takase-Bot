@@ -1,0 +1,381 @@
+@font-face {
+  font-family: "ChenYu";
+  src: url("../../shared/fonts/NotoSansCJKsc-Regular.otf") format("truetype");
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Noto CJK";
+  src: url("../../shared/fonts/NotoSansCJKsc-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Noto CJK";
+  src: url("../../shared/fonts/NotoSansCJKsc-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Gakusan Maru";
+  src: url("../../shared/fonts/NotoSansCJKsc-Bold.otf") format("opentype");
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Resource Han Rounded";
+  src: url("../../shared/fonts/NotoSansCJKsc-Bold.otf") format("truetype");
+  font-weight: 500;
+  font-display: block;
+}
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 1080px;
+  height: 1920px;
+  margin: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+body {
+  font-family: "Noto CJK", sans-serif;
+}
+
+#completion-sheet {
+  position: relative;
+  width: 1080px;
+  height: 1920px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.background {
+  position: absolute;
+  left: 0;
+  top: 155px;
+  z-index: 0;
+  width: 1080px;
+  height: 1637px;
+  object-fit: fill;
+  user-select: none;
+}
+
+.plate-frame {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 1080px;
+  height: 1920px;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* 顶部玩家资料框 */
+.player-card {
+  position: absolute;
+  left: 104px;
+  top: 19px;
+  z-index: 4;
+  width: 437px;
+  height: 129px;
+  border: 2px solid rgba(255, 255, 255, 0.94);
+  border-radius: 15px;
+  background: rgba(255, 246, 255, 0.76);
+  box-shadow: 0 2px 6px rgba(70, 75, 125, 0.28);
+}
+
+.avatar {
+  position: absolute;
+  left: 20px;
+  top: 12px;
+  width: 94px;
+  height: 100px;
+  border: 2px solid rgba(255, 255, 255, 0.96);
+  border-radius: 6px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.75);
+  box-shadow: 0 1px 5px rgba(52, 57, 92, 0.3);
+}
+
+.player-level,
+.player-name {
+  position: absolute;
+  left: 130px;
+  right: 12px;
+  overflow: hidden;
+  font-family: "Gakusan Maru", "Resource Han Rounded", "Noto CJK", sans-serif;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  paint-order: stroke fill;
+}
+
+.player-level {
+  top: 20px;
+  height: 39px;
+  color: #173ee0;
+  font-size: 39px;
+  letter-spacing: 0.5px;
+  -webkit-text-stroke: 5px #fff;
+}
+
+.player-level::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  color: #173ee0;
+  -webkit-text-stroke: 1px #173ee0;
+}
+
+.player-name {
+  top: 73px;
+  height: 43px;
+  color: #a61de4;
+  font-size: 38px;
+  letter-spacing: 3px;
+  -webkit-text-stroke: 5px #fff;
+}
+
+.player-name::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  background: linear-gradient(180deg, #d529f6 0%, #a913dc 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  -webkit-text-stroke: 1px #aa16d8;
+}
+
+/* 动态等级区。10 列恰好使用 x=129..1049 的主体宽度。 */
+.level-groups {
+  --completion-compact: 1;
+  --jacket-size: calc(75px * var(--completion-compact));
+  --song-column-gap: calc((921px - (10 * var(--jacket-size))) / 9);
+
+  position: absolute;
+  left: 14px;
+  top: 213px;
+  z-index: 3;
+  display: flex;
+  width: 1036px;
+  height: auto;
+  flex-direction: column;
+  gap: calc(20px * var(--completion-compact));
+}
+
+.level-group {
+  display: grid;
+  min-height: calc(88px * var(--completion-compact));
+  grid-template-columns: 96px 921px;
+  column-gap: 19px;
+  align-items: start;
+}
+
+.level-tile {
+  position: relative;
+  width: 96px;
+  height: calc(88px * var(--completion-compact));
+}
+
+.level-tile img {
+  position: absolute;
+  inset: 0;
+  width: calc(96px * var(--completion-compact));
+  height: calc(88px * var(--completion-compact));
+  object-fit: fill;
+}
+
+.level-value {
+  position: absolute;
+  left: 0;
+  width: calc(90px * var(--completion-compact));
+  top: calc(29px * var(--completion-compact));
+  height: calc(49px * var(--completion-compact));
+
+  color: #050505;
+  font-family: "Gakusan Maru", "Resource Han Rounded", sans-serif;
+  font-size: calc(42px * var(--completion-compact));
+  font-weight: 700;
+  line-height: calc(49px * var(--completion-compact));
+  letter-spacing: calc(-1px * var(--completion-compact));
+
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* 只有带 + 的等级往左移动一点 */
+.level-group[data-level$="+"] .level-value {
+  transform: translateX(calc(1px * var(--completion-compact)));
+}
+
+.song-grid {
+  display: grid;
+  padding-top: calc(6px * var(--completion-compact));
+  grid-template-columns: repeat(10, var(--jacket-size));
+  grid-auto-rows: var(--jacket-size);
+  column-gap: var(--song-column-gap);
+  row-gap: calc(19px * var(--completion-compact));
+  align-content: start;
+}
+
+.song-tile {
+  position: relative;
+  width: var(--jacket-size);
+  height: var(--jacket-size);
+}
+
+.song-jacket {
+  display: block;
+  width: var(--jacket-size);
+  height: var(--jacket-size);
+  border: 1px solid rgba(17, 23, 38, 0.24);
+  object-fit: cover;
+  background: linear-gradient(135deg, #edeffa, #bec6df);
+  box-shadow: 0 1px 2px rgba(12, 23, 47, 0.2);
+}
+
+.song-jacket.image-load-failed {
+  opacity: 0.55;
+}
+
+.status-badges {
+  position: absolute;
+  left: calc(-8px * var(--completion-compact));
+  top: calc(10px * var(--completion-compact));
+  z-index: 2;
+  display: flex;
+  width: calc(91px * var(--completion-compact));
+  flex-direction: column;
+  align-items: center;
+  gap: calc(5px * var(--completion-compact));
+  pointer-events: none;
+}
+
+.status-badges img {
+  width: calc(91px * var(--completion-compact));
+  height: calc(25px * var(--completion-compact));
+  object-fit: fill;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2));
+}
+
+/* FB 固定使用第二行槽位；没有 AB/FC 时也不向上补位。 */
+.status-badges .status-badge-full-bell:first-child {
+  margin-top: calc(30px * var(--completion-compact));
+}
+
+/* 底部固定四难度统计。它不会随上方等级数移动。 */
+.difficulty-summary {
+  position: absolute;
+  left: 103px;
+  top: 1630px;
+  z-index: 4;
+  display: grid;
+  width: 866px;
+  grid-template-columns: repeat(4, 154px);
+  column-gap: 85px;
+}
+
+.summary-card {
+  position: relative;
+  width: 154px;
+  height: 158px;
+  overflow: hidden;
+  border-radius: 9px;
+  color: #fff;
+  box-shadow: 0 2px 5px rgba(31, 35, 58, 0.18);
+}
+
+.summary-basic { background: #14a820; }
+.summary-advanced { background: #f5a400; }
+.summary-expert { background: #e50078; }
+.summary-master { background: #a932da; }
+
+.summary-difficulty {
+  display: block;
+  width: 78px;
+  height: 20px;
+  margin: 21px auto 0;
+  object-fit: fill;
+}
+
+.summary-values {
+  margin-top: 25px;
+  padding-left: 0;
+  width: 100%;
+  text-align: center;
+
+  font: 700 20px/1.8 "Gakusan Maru", "Resource Han Rounded", sans-serif;
+  letter-spacing: -0.5px;
+  white-space: nowrap;
+}
+
+.summary-label {
+  color: #ffbf18;
+  -webkit-text-stroke: 0.2px rgba(255, 255, 255, 0.35);
+}
+
+.summary-card:not(.summary-basic) .summary-label {
+  color: #fff4a6;
+}
+
+#render-error {
+  position: absolute;
+  left: 30px;
+  right: 30px;
+  top: 180px;
+  z-index: 20;
+  display: none;
+  padding: 14px 18px;
+  border: 2px solid #b90027;
+  border-radius: 8px;
+  color: #85001b;
+  background: rgba(255, 238, 242, 0.96);
+  font: 700 20px/1.4 "Noto CJK", sans-serif;
+}
+
+#render-error.visible {
+  display: block;
+}
+
+.footer-credit {
+  position: absolute;
+  left: 180px;
+  top: 167px;
+  z-index: 10;
+
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 55px;
+
+  color: #111;
+  font-family: "ChenYu", "Noto CJK", sans-serif;
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+
+  white-space: nowrap;
+
+  -webkit-text-stroke: 5px #fff;
+  paint-order: stroke fill;
+}
+
+.footer-credit .credit-name {
+  color: #7fdff4;
+}

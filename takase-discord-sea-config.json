@@ -1,0 +1,5 @@
+{
+  "main": "takase-discord-bundle.cjs",
+  "output": "takase-discord-sea.blob",
+  "disableExperimentalSEAWarning": true
+}

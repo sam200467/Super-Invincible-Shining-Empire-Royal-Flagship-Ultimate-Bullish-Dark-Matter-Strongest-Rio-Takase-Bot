@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "updated": "2026-08-28",
+  "plateCount": 11,
+  "plates": [
+    {
+      "id": "040100",
+      "nameJa": "桜撃",
+      "nameZhHans": "樱击",
+      "version": "ONGEKI",
+      "catalogVersion": "オンゲキ",
+      "recordVersionIndex": 0,
+      "requiredSongCount": 81,
+      "fullLayout": "ui_userplate_040100.png",
+      "exactGameTexture": true
+    },
+    {
+      "id": "040105",
+      "nameJa": "進撃",
+      "nameZhHans": "进击",
+      "version": "ONGEKI PLUS",
+      "catalogVersion": "オンゲキ PLUS",
+      "recordVersionIndex": 1,
+      "requiredSongCount": 53,
+      "fullLayout": "ui_userplate_040105.png",
+      "exactGameTexture": true
+    },
+    {
+      "id": "040110",
+      "nameJa": "夏撃",
+      "nameZhHans": "夏击",
+      "version": "ONGEKI SUMMER",
+      "catalogVersion": "SUMMER",
+      "recordVersionIndex": 2,
+      "requiredSongCount": 63,
+      "fullLayout": "ui_userplate_040110.png",
+      "exactGameTexture": true
+    },
+    {
+      "id": "040115",
+      "nameJa": "波撃",
+      "nameZhHans": "波击",
+      "version": "ONGEKI SUMMER PLUS",
+      "catalogVersion": "SUMMER PLUS",
+      "recordVersionIndex": 3,
+      "requiredSongCount": 54,
+      "fullLayout": "ui_userplate_040115.png",
+      "exactGameTexture": true
+    },
+    {
+      "id": "040120",
+      "nameJa": "赤撃",
+      "nameZhHans": "赤击",
+      "version": "ONGEKI R.E.D.",
+      "catalogVersion": "R.E.D.",
+      "recordVersionIndex": 4,
+      "requiredSongCount": 67,
+      "fullLayout": "ui_userplate_040120.png",
+      "exactGameTexture": true
+    },
+    {
+      "id": "040125",
+      "nameJa": "皇撃",
+      "nameZhHans": "皇击",
+      "version": "ONGEKI R.E.D. PLUS",
+      "catalogVersion": "R.E.D. PLUS",
+      "recordVersionIndex": 5,
+      "requiredSongCount": 80,
+      "fullLayout": "ui_userplate_040125.png",
+      "exactGameTexture": true
+    },
+    {
+      "id": "040130",
+      "nameJa": "輝撃",
+      "nameZhHans": "辉击",
+      "version": "ONGEKI bright",
+      "catalogVersion": "bright",
+      "recordVersionIndex": 6,
+      "requiredSongCount": 69,
+      "fullLayout": "ui_userplate_040130.png",
+      "exactGameTexture": true
+    },
+    {
+      "id": "040135",
+      "nameJa": "耀撃",
+      "nameZhHans": "耀击",
+      "version": "ONGEKI bright MEMORY Act.1",
+      "catalogVersion": "bright MEMORY Act.1",
+      "recordVersionIndex": 7,
+      "requiredSongCount": 88,
+      "fullLayout": "ui_userplate_040135.png",
+      "exactGameTexture": true
+    },
+    {
+      "id": "040140",
+      "nameJa": "閃撃",
+      "nameZhHans": "闪击",
+      "version": "ONGEKI bright MEMORY Act.2",
+      "catalogVersion": "bright MEMORY Act.2",
+      "recordVersionIndex": 8,
+      "requiredSongCount": 94,
+      "fullLayout": "ui_userplate_040140.png",
+      "exactGameTexture": true
+    },
+    {
+      "id": "040145",
+      "nameJa": "想撃",
+      "nameZhHans": "想击",
+      "version": "ONGEKI bright MEMORY Act.3",
+      "catalogVersion": "bright MEMORY Act.3",
+      "recordVersionIndex": 9,
+      "requiredSongCount": 81,
+      "fullLayout": "ui_userplate_040145.png",
+      "exactGameTexture": true
+    },
+    {
+      "id": "040150",
+      "nameJa": "爽撃",
+      "nameZhHans": "爽击",
+      "version": "ONGEKI Re:Fresh Act.1",
+      "catalogVersion": "Re:Fresh Act.1",
+      "recordVersionIndex": 10,
+      "requiredSongCount": 120,
+      "fullLayout": "ui_userplate_040150.png",
+      "exactGameTexture": true
+    }
+  ],
+  "reference": {
+    "officialReFresh": "https://info-ongeki.sega.jp/9062/",
+    "officialReFreshAct2": "https://info-ongeki.sega.jp/12225/",
+    "completionGuide": "https://wikiwiki.jp/gameongeki/%E3%82%B9%E3%83%9A%E3%82%B7%E3%83%A3%E3%83%AB%E3%83%97%E3%83%AC%E3%83%BC%E3%83%88%E6%AC%B2%E3%81%97%E3%81%84%E4%BA%BA%E5%90%91%E3%81%91"
+  }
+}
