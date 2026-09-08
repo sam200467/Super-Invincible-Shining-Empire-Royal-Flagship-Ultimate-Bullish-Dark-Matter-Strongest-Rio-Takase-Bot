@@ -74,3 +74,7 @@ The account-binding form is visible only to the user who opened it. Score images
 The public release uses the included Noto fonts covered by the accompanying OFL license texts, so its appearance may differ slightly from the author's local build. Game images, song metadata, fonts, and integration scripts retain their respective sources and rights. Do not treat third-party material as an original asset of this repository. The project does not currently declare a single project-wide open-source license.
 
 The Windows build and offline self-tests have been verified. A live Discord connection and score lookup require valid deployment configuration and account credentials.
+
+## Acknowledgements
+
+Special thanks to [@miruklerina](https://twitter.com/miruklerina) for providing valuable artistic support and creating the application icon.
