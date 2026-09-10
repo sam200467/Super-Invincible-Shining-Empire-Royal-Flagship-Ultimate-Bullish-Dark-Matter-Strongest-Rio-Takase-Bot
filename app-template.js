@@ -211,7 +211,10 @@ class CDP {
 
   async navigate(url) {
     await this.send("Page.navigate", { url });
-    await this.waitFor(`document.readyState === "complete"`, 30000, 500);
+    // Page.navigate may return while Runtime.evaluate still targets the old
+    // about:blank document. Wait for the navigation to commit before
+    // accepting readyState.
+    await this.waitFor(`location.href !== "about:blank" && document.readyState === "complete"`, 30000, 250);
     await sleep(1000);
   }
 
@@ -572,6 +575,15 @@ async function browserCredentialLogin(email, password, options = {}) {
       let current = new URL(currentUrl);
 
       if (/\/login/.test(current.pathname)) {
+        // The login page is mounted by JavaScript after the document load event.
+        // Wait for the complete form instead of assuming a fixed delay is enough.
+        await cdp.waitFor(`(() => {
+          const emailInput = document.querySelector("#email, input[type=email]");
+          const passwordInput = document.querySelector("#password, input[type=password]");
+          const form = emailInput && emailInput.closest("form");
+          const submit = form && form.querySelector("button[type=submit], input[type=submit]");
+          return !!(emailInput && passwordInput && form && submit);
+        })()`, 30000, 250);
         const submitted = await cdp.evaluate(`(() => {
           const emailInput = document.querySelector("#email, input[type=email]");
           const passwordInput = document.querySelector("#password, input[type=password]");
