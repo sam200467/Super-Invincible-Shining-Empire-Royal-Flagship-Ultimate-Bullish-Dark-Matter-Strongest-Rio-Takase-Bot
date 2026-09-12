@@ -1,5 +1,9 @@
 import fs from "node:fs";
+import aliasStoreModule from "./song-alias-store.cjs";
+const { SongAliasStore } = aliasStoreModule;
+import { Converter } from "opencc-js";
 import path from "node:path";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { ProxyAgent } from "undici";
@@ -11,6 +15,7 @@ import {
   Client,
   GatewayIntentBits,
   MessageFlags,
+  PermissionFlagsBits,
   ModalBuilder,
   REST,
   Routes,
@@ -19,7 +24,7 @@ import {
   TextInputStyle,
 } from "discord.js";
 
-const VERSION = "1.13.0-constant-table";
+const VERSION = "1.14.4-song-search";
 const GENERATE_COOLDOWN_MS = 60 * 1000;
 // discord.js 默认只给 REST 请求 15 秒。分表图片约 5–6 MiB，经代理上传时
 // 很容易超过默认值并抛出 “This operation was aborted”。
@@ -89,6 +94,7 @@ const COMMANDS = [
       .setDescription("Full Song ID, full title, or part of a title")
       .setDescriptionLocalizations({ "zh-CN": "完整 Song ID、完整曲名或部分曲名（不区分大小写）", "zh-TW": "完整 Song ID、完整曲名或部分曲名（不區分大小寫）" })
       .setRequired(true)
+      .setAutocomplete(true)
       .setMaxLength(200)),
   new SlashCommandBuilder()
     .setName("chartinfo")
@@ -101,6 +107,7 @@ const COMMANDS = [
       .setDescription("Song ID or title, followed by BASIC/ADVANCED/EXPERT/MASTER/LUNATIC")
       .setDescriptionLocalizations({ "zh-CN": "曲名或 Song ID 加难度，例如 VIIIbit Explorer master", "zh-TW": "曲名或 Song ID 加難度，例如 VIIIbit Explorer master" })
       .setRequired(true)
+      .setAutocomplete(true)
       .setMaxLength(220)),
   new SlashCommandBuilder()
     .setName("level")
@@ -175,6 +182,21 @@ const COMMANDS = [
     .setNameLocalizations({ "zh-CN": "解绑", "zh-TW": "解綁" })
     .setDescription("Delete your saved u.otogame account")
     .setDescriptionLocalizations({ "zh-CN": "删除自己保存的大饼账号", "zh-TW": "刪除自己保存的大餅帳號" }),
+  new SlashCommandBuilder().setName("aliasadd").setNameLocalizations({ "zh-CN": "添加别名", "zh-TW": "新增別名" })
+    .setDescription("添加歌曲别名；所有成员可用")
+    .addStringOption(o => o.setName("query").setNameLocalizations({ "zh-CN": "曲目", "zh-TW": "曲目" }).setDescription("部分曲名、部分已有别名或完整 Song ID").setRequired(true).setAutocomplete(true).setMaxLength(200))
+    .addStringOption(o => o.setName("alias").setNameLocalizations({ "zh-CN": "别名", "zh-TW": "別名" }).setDescription("要添加的别名，最多 80 字符").setRequired(true).setMaxLength(80)),
+  new SlashCommandBuilder().setName("aliasdelete").setNameLocalizations({ "zh-CN": "删除别名", "zh-TW": "刪除別名" })
+    .setDescription("删除指定歌曲的一个别名（仅管理员）")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption(o => o.setName("query").setNameLocalizations({ "zh-CN": "曲目", "zh-TW": "曲目" }).setDescription("部分曲名、已有别名或完整 ID，支持模糊搜索").setRequired(true).setAutocomplete(true).setMaxLength(200))
+    .addStringOption(o => o.setName("alias").setNameLocalizations({ "zh-CN": "别名", "zh-TW": "別名" }).setDescription("要删除的完整别名").setRequired(true).setAutocomplete(true).setMaxLength(80)),
+  new SlashCommandBuilder().setName("aliases").setNameLocalizations({ "zh-CN": "查看别名", "zh-TW": "查看別名" })
+    .setDescription("查看一首歌曲的全部别名")
+    .addStringOption(o => o.setName("query").setNameLocalizations({ "zh-CN": "曲目", "zh-TW": "曲目" }).setDescription("部分曲名、部分已有别名或完整 Song ID").setRequired(true).setAutocomplete(true).setMaxLength(200)),
+  new SlashCommandBuilder().setName("whatis").setNameLocalizations({ "zh-CN": "是什么歌", "zh-TW": "是什麼歌" })
+    .setDescription("按别名反查对应歌曲")
+    .addStringOption(o => o.setName("query").setNameLocalizations({ "zh-CN": "别名", "zh-TW": "別名" }).setDescription("输入完整或部分别名，支持简繁模糊搜索").setRequired(true).setAutocomplete(true).setMaxLength(100)),
 ].map((command) => command.toJSON());
 
 function emit(tag, value = "") {
@@ -190,12 +212,14 @@ function safeError(error) {
     .slice(0, 800);
 }
 
+const simplifySongQuery = Converter({ from: "tw", to: "cn" });
+
 function normalizeSongQuery(value) {
-  return String(value || "")
+  return simplifySongQuery(String(value || "")
     .normalize("NFKC")
     .replace(/[\s　]+/g, " ")
     .trim()
-    .toLowerCase();
+    .toLowerCase());
 }
 
 function normalizeLevelCommandQuery(value) {
@@ -220,6 +244,10 @@ function levelCommandTarget(query) {
   return `LEVEL ${query}`;
 }
 
+let songAliases = new SongAliasStore(null, normalizeSongQuery);
+
+const SONG_SEARCH_INDEX = INTERNAL_SONGS.map(song => ({ song, title: normalizeSongQuery(song?.name) }));
+
 function searchSongs(query) {
   const raw = String(query || "").normalize("NFKC").trim();
   if (!raw) return [];
@@ -229,8 +257,9 @@ function searchSongs(query) {
     return INTERNAL_SONGS.filter((song) => Number(song?.id) === id);
   }
   const needle = normalizeSongQuery(raw);
-  return INTERNAL_SONGS
-    .filter((song) => normalizeSongQuery(song?.name).includes(needle))
+  return SONG_SEARCH_INDEX
+    .filter(({ song, title }) => title.includes(needle) || songAliases.matches(song.id, needle))
+    .map(({ song }) => song)
     .sort((a, b) => Number(a.id) - Number(b.id));
 }
 
@@ -270,6 +299,128 @@ function searchChartInfo(value) {
     .filter((song) => songHasChartDifficulty(song, parsed.difficultyId))
     .map((song) => ({ song, difficultyId: parsed.difficultyId, difficultyName: parsed.difficultyName }));
   return { parsed, matches };
+}
+
+// Candidate values use IDs so duplicate titles and shortened labels stay unambiguous.
+function songAutocomplete(commandName, value) {
+  if (!["song", "chartinfo"].includes(commandName)) return [];
+  const raw = String(value || "").normalize("NFKC").replace(/[\s　]+/g, " ").trim();
+  let query = raw;
+  let difficulties = [3, 2, 1, 0, 10];
+  if (commandName === "chartinfo") {
+    const parsed = parseChartInfoQuery(raw);
+    if (parsed) {
+      query = parsed.songQuery;
+      difficulties = [parsed.difficultyId];
+    } else {
+      const suffix = raw.match(/^(.*\S)\s+(\S+)$/);
+      const partial = suffix && [...CHART_INFO_DIFFICULTY_ALIASES]
+        .filter(([alias]) => alias.startsWith(suffix[2].toLowerCase())).map(([, id]) => id);
+      if (partial?.length) {
+        query = suffix[1];
+        difficulties = [...new Set(partial)];
+      }
+    }
+  }
+  const needle = normalizeSongQuery(query);
+  const idMatch = query.match(/^(?:id\s*)?(\d+)$/i);
+  const songs = SONG_SEARCH_INDEX.filter(({ song, title }) => !needle ||
+    (idMatch ? String(song.id).startsWith(idMatch[1]) : title.includes(needle) || songAliases.matches(song.id, needle)))
+    .sort((a, b) => {
+      const rank = item => idMatch ? (String(item.song.id) === idMatch[1] ? 0 : 1)
+        : item.title === needle || songAliases.matches(item.song.id, needle, true) ? 0 : item.title.startsWith(needle) ? 1 : 2;
+      return rank(a) - rank(b) || Number(a.song.id) - Number(b.song.id);
+    });
+  const choices = [];
+  for (const { song } of songs) {
+    const entries = commandName === "song" ? [null] : difficulties.filter(id => songHasChartDifficulty(song, id));
+    for (const id of entries) {
+      const difficulty = id === null ? "" : CHART_INFO_DIFFICULTY_NAMES[id];
+      choices.push({
+        name: ("id" + song.id + " " + (difficulty ? "[" + difficulty + "] " : "") + song.name + " — " + (song.artistName || "")).slice(0, 100),
+        value: "id" + song.id + (difficulty ? " " + difficulty.toLowerCase() : ""),
+      });
+      if (choices.length === 25) return choices;
+    }
+  }
+  return choices;
+}
+
+async function handleAutocomplete(interaction, config) {
+  if (assertAllowedInteraction(interaction, config)) return interaction.respond([]);
+  const focused = interaction.options.getFocused(true);
+  if (interaction.commandName === "aliasdelete" && focused.name === "alias") {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return interaction.respond([]);
+    const matches = searchSongs(interaction.options.getString("query") || "");
+    const needle = normalizeSongQuery(focused.value);
+    return interaction.respond(matches.length === 1 ? songAliases.list(matches[0].id)
+      .filter(alias => normalizeSongQuery(alias).includes(needle)).slice(0, 25).map(alias => ({ name: alias, value: alias })) : []);
+  }
+  if (focused.name !== "query") return interaction.respond([]);
+  if (interaction.commandName === "whatis") return interaction.respond(aliasAutocomplete(focused.value));
+  const command = ["aliasadd", "aliasdelete", "aliases"].includes(interaction.commandName) ? "song" : interaction.commandName;
+  return interaction.respond(songAutocomplete(command, focused.value));
+}
+
+function aliasAutocomplete(value) {
+  const needle = normalizeSongQuery(value);
+  const seen = new Set();
+  const choices = [];
+  for (const entry of songAliases.entries) {
+    const key = normalizeSongQuery(entry.alias);
+    if (!key.includes(needle) || seen.has(key)) continue;
+    seen.add(key);
+    choices.push({ name: entry.alias, value: entry.alias });
+    if (choices.length === 25) break;
+  }
+  return choices;
+}
+
+async function replyAliasLines(interaction, header, lines, footer = "", privateReply = false) {
+  const chunks = splitDiscordLines(header, lines, footer);
+  for (let i = 0; i < chunks.length; i++) {
+    const payload = { content: chunks[i], allowedMentions: { parse: [] }, ...(privateReply ? { flags: MessageFlags.Ephemeral } : {}) };
+    if (i === 0) await interaction.reply(payload);
+    else await interaction.followUp(payload);
+  }
+}
+
+async function handleAliasCommand(interaction) {
+  const name = interaction.commandName;
+  if (name === "aliasdelete" && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    return interaction.reply({ content: "只有服务器管理员可以删除别名。", flags: MessageFlags.Ephemeral });
+  }
+  const query = interaction.options.getString("query", true);
+  if (name === "whatis") {
+    const needle = normalizeSongQuery(query);
+    const matches = needle ? INTERNAL_SONGS.filter(song => songAliases.matches(song.id, needle)) : [];
+    return replyAliasLines(interaction, matches.length ? "匹配到以下别名对应的曲目：" : "没有找到这个别名。可以从输入候选中选择已登记别名，或用 /aliases 查看某首歌的全部别名。", songMatchLines(matches));
+  }
+  const matches = searchSongs(query);
+  if (matches.length !== 1) {
+    return replyAliasLines(interaction, matches.length ? "找到多首曲目，请用完整 Song ID 明确选择：" : "没有找到曲目，请检查曲名或完整 Song ID。", songMatchLines(matches), "", name !== "aliasadd");
+  }
+  const song = matches[0];
+  if (name === "aliases") {
+    const aliases = songAliases.list(song.id);
+    return replyAliasLines(interaction, songMatchLines([song])[0] + " 的全部别名（" + aliases.length + " 个）：",
+      aliases.length ? aliases.map(alias => "• " + escapeDiscordText(alias)) : ["暂未添加别名。"]);
+  }
+  let alias;
+  try { alias = songAliases.validateAlias(interaction.options.getString("alias", true)); }
+  catch (error) { return interaction.reply({ content: error.message, ...(name === "aliasadd" ? {} : { flags: MessageFlags.Ephemeral }) }); }
+  await interaction.deferReply(name === "aliasadd" ? {} : { flags: MessageFlags.Ephemeral });
+  if (name === "aliasdelete") {
+    const result = songAliases.remove(Number(song.id), alias);
+    return interaction.editReply({ content: (result.removed ? "已删除别名：" : "这首歌没有该别名：") + escapeDiscordText(alias) + " → " + songMatchLines([song])[0], allowedMentions: { parse: [] } });
+  }
+  const result = songAliases.add(Number(song.id), alias, interaction.user.id);
+  const shared = INTERNAL_SONGS.filter(other => other.id !== song.id && songAliases.matches(other.id, normalizeSongQuery(alias), true));
+  await interaction.editReply({
+    content: (result.added ? "已添加别名：" : "这首歌已有该别名（简繁、大小写视为相同）：") + escapeDiscordText(alias) + " → " + songMatchLines([song])[0] +
+      (shared.length ? "\n这个别名还对应 " + shared.length + " 首歌；查询时会列出全部对应曲目。" : ""),
+    allowedMentions: { parse: [] },
+  });
 }
 
 function chartInfoMatchLines(matches) {
@@ -596,7 +747,7 @@ function helpText() {
     "`/bind`　绑定或更换自己的 u.otogame 大饼账号",
     "`/chart`　生成自己的 B50 + N10 + P50 分表",
     "`/plate`　选择一个版本牌子，生成全曲 AB / FC / FB 完成情况",
-    "`/song`　按完整 Song ID 或曲名生成单曲全难度成绩图",
+    "`/song`　按 Song ID 或曲名生成单曲成绩图（简繁互通、输入补全）",
     "`/chartinfo`　输入曲名或 Song ID 加难度，生成单谱面分数线、容错与白金分分析图",
     "`/constant`　定数表查询：14 显示 14.0–14.9，14.2 精确查询；无需绑定账号",
     "`/level`　输入显示等级（14/14+）、精确定数（14.1）或 ABFB；页码默认 1，每页最多 70 张谱面",
@@ -604,6 +755,7 @@ function helpText() {
     "`/status`　查看当前生成队列",
     "`/unbind`　删除本机保存的账号绑定",
     "",
+    "别名命令：/aliasadd 添加别名（所有成员）；/aliasdelete 删除别名（仅管理员）；/aliases 查看某首歌全部别名；/whatis 按别名反查。查询无需绑定。",
     "首次使用请先执行 `/bind`。账号表单和结果只对你可见；请勿把邮箱、密码或 Bot Token 发到频道。",
   ].join("\n");
 }
@@ -639,9 +791,9 @@ function assertAllowedInteraction(interaction, config) {
 }
 
 async function selftest() {
-  if (COMMANDS.length !== 11) throw new Error("指令数量自测失败");
+  if (COMMANDS.length !== 15) throw new Error("指令数量自测失败");
   const names = COMMANDS.map((item) => item.name).join(",");
-  if (names !== "constant,help,bind,chart,plate,song,chartinfo,level,calculate,status,unbind") throw new Error("指令定义自测失败：" + names);
+  if (names !== "constant,help,bind,chart,plate,song,chartinfo,level,calculate,status,unbind,aliasadd,aliasdelete,aliases,whatis") throw new Error("指令定义自测失败：" + names);
   const plateCommand = COMMANDS.find((item) => item.name === "plate");
   const plateValues = plateCommand?.options?.[0]?.choices?.map((item) => item.value) || [];
   if (PLATE_CHOICES.length !== 11 || plateValues.join(",") !== PLATE_CHOICES.map((item) => item.id).join(",")) {
@@ -687,6 +839,112 @@ async function selftest() {
       chartInfoInvalid.parsed !== null || chartInfoInvalid.matches.length !== 0) {
     throw new Error("单谱面分析检索规则自测失败");
   }
+  if (normalizeSongQuery("愛戀 樂曲 龍") !== normalizeSongQuery("爱恋 乐曲 龙")) throw Error("简繁标准化失败");
+  for (const command of ["song", "chartinfo"]) {
+    if (!COMMANDS.find(c => c.name === command).options[0].autocomplete) throw Error("自动补全未注册");
+    for (const query of ["", "愛", "爱", "id87", "viyella", "初音ミクの激唱"]) {
+      const choices = songAutocomplete(command, query);
+      if (choices.length > 25 || new Set(choices.map(c => c.value)).size !== choices.length ||
+          choices.some(c => !c.name.length || c.name.length > 100 || c.value.length > 100)) throw Error("补全长度或唯一性失败");
+      for (const choice of choices) {
+        const matches = command === "song" ? searchSongs(choice.value) : searchChartInfo(choice.value).matches;
+        if (matches.length !== 1) throw Error("补全候选无法唯一提交：" + choice.value);
+      }
+    }
+    if (JSON.stringify(songAutocomplete(command, "愛")) !== JSON.stringify(songAutocomplete(command, "爱"))) throw Error("简繁补全结果不同");
+  }
+  if (!searchSongs("愛").length || JSON.stringify(searchSongs("愛")) !== JSON.stringify(searchSongs("爱"))) throw Error("简繁检索结果不同");
+  if (songAutocomplete("song", "id870")[0]?.value !== "id870" ||
+      songAutocomplete("song", "zzzz_no_such_song").length ||
+      songAutocomplete("chartinfo", "id870 紫譜")[0]?.value !== "id870 master" ||
+      songAutocomplete("chartinfo", "id870 ma")[0]?.value !== "id870 master" ||
+      songAutocomplete("chartinfo", "初音ミクの激唱 白谱")[0]?.value !== "id8021 lunatic") throw Error("自动补全筛选失败");
+  const autocompleteConfig = { guildId: "g", channelIds: ["c"] };
+  let autocompleteResponse;
+  const mockAutocomplete = { inGuild: () => true, guildId: "g", channelId: "c", commandName: "song",
+    options: { getFocused: () => ({ name: "query", value: "id870" }) }, respond: async choices => { autocompleteResponse = choices; } };
+  await handleAutocomplete(mockAutocomplete, autocompleteConfig);
+  if (autocompleteResponse[0]?.value !== "id870") throw Error("自动补全交互失败");
+  await handleAutocomplete({ ...mockAutocomplete, channelId: "denied" }, autocompleteConfig);
+  if (autocompleteResponse.length) throw Error("自动补全频道限制失败");
+
+  const aliasTestDir = fs.mkdtempSync(path.join(os.tmpdir(), "takase-alias-integration-"));
+  const originalAliases = songAliases;
+  try {
+    songAliases = new SongAliasStore(path.join(aliasTestDir, "aliases.json"), normalizeSongQuery);
+    const replies = [];
+    const deferredReplies = [];
+    const interaction = (commandName, values, admin = false) => ({
+      commandName, memberPermissions: { has: permission => admin && permission === PermissionFlagsBits.Administrator }, user: { id: "test-user" },
+      options: { getString: name => values[name] },
+      reply: async payload => replies.push(payload), followUp: async payload => replies.push(payload),
+      deferReply: async payload => deferredReplies.push({ commandName, ...payload }), editReply: async payload => replies.push(payload),
+    });
+    if (COMMANDS.find(c => c.name === "aliasadd").default_member_permissions != null ||
+        COMMANDS.find(c => c.name === "aliasdelete").default_member_permissions !== String(PermissionFlagsBits.Administrator)) throw Error("别名命令默认权限失败");
+    await handleAliasCommand(interaction("aliasadd", {query:"viyella",alias:"測試愛稱"},true));
+    const ambiguousAdd = replies.pop();
+    if (songAliases.entries.length || !ambiguousAdd.content.includes("多首") || ambiguousAdd.flags) throw Error("添加别名公开候选失败");
+    await handleAliasCommand(interaction("aliasadd", {query:"viiibit exp",alias:"測試愛稱"}));
+    if (songAliases.entries.length !== 1 || !replies.pop().content.includes("已添加")) throw Error("添加别名失败");
+    await handleAliasCommand(interaction("aliasadd", {query:"id870",alias:"测试爱称"},true));
+    if (songAliases.entries.length !== 1 || !replies.pop().content.includes("已有")) throw Error("重复别名处理失败");
+    if (searchSongs("测试爱称")[0]?.id !== 870 || searchSongs("测试爱")[0]?.id !== 870 ||
+        songAutocomplete("song","测试爱称")[0]?.value !== "id870" ||
+        songAutocomplete("chartinfo","测试爱称 紫譜")[0]?.value !== "id870 master" ||
+        searchChartInfo("测试爱称 mas").matches[0]?.song.id !== 870) throw Error("别名搜索或补全失败");
+    await handleAliasCommand(interaction("aliases",{query:"viiibit exp"}));
+    if (!replies.pop().content.includes("測試愛稱")) throw Error("查看全部别名失败");
+    await handleAliasCommand(interaction("whatis",{query:"测试爱称"}));
+    if (!replies.pop().content.includes("id870")) throw Error("别名反查失败");
+    await handleAliasCommand(interaction("whatis",{query:"测试爱"}));
+    if (!replies.pop().content.includes("id870")) throw Error("别名反查部分匹配失败");
+    await handleAliasCommand(interaction("aliasadd",{query:"id168",alias:"测试爱称"},true));
+    const shared = replies.pop();
+    if (!shared.content.includes("还对应")) throw Error("别名多曲提示失败");
+    await handleAliasCommand(interaction("whatis",{query:"測試愛稱"}));
+    const reverse = replies.pop();
+    if (!reverse.content.includes("id168") || !reverse.content.includes("id870")) throw Error("别名多曲反查失败");
+    if (aliasAutocomplete("测试爱").length !== 1) throw Error("别名补全简繁去重失败");
+    await handleAutocomplete({ ...mockAutocomplete, commandName:"whatis", options:{ getFocused:()=>({name:"query",value:"测试爱"}) } }, autocompleteConfig);
+    if (autocompleteResponse[0]?.value !== "測試愛稱") throw Error("反查交互补全失败");
+    await handleAutocomplete({ ...mockAutocomplete, commandName:"aliases" }, autocompleteConfig);
+    if (autocompleteResponse[0]?.value !== "id870") throw Error("查看别名补全失败");
+    for (const commandName of ["song", "chartinfo", "aliasadd", "aliasdelete", "aliases"]) {
+      if (!COMMANDS.find(c => c.name === commandName).options.find(o => o.name === "query").autocomplete) throw Error("歌曲输入未启用自动补全：" + commandName);
+      const value = commandName === "chartinfo" ? "viiibit exp 紫谱" : "viiibit exp";
+      await handleAutocomplete({ ...mockAutocomplete, commandName, options:{getFocused:()=>({name:"query",value})} }, autocompleteConfig);
+      if (!autocompleteResponse.some(c => c.value === (commandName === "chartinfo" ? "id870 master" : "id870"))) throw Error("歌曲输入模糊补全失败：" + commandName);
+    }
+    if (deferredReplies.filter(r=>r.commandName === "aliasadd").some(r=>r.flags)) throw Error("添加别名结果应公开");
+    const file = songAliases.filePath;
+    songAliases = new SongAliasStore(file,normalizeSongQuery);
+    songAliases.load();
+    if (searchSongs("测试爱称").length !== 2) throw Error("重载别名搜索失败");
+    await handleAliasCommand(interaction("aliasdelete", {query:"id870",alias:"测试爱称"}));
+    if (!replies.pop().content.includes("管理员") || !songAliases.matches(870,normalizeSongQuery("测试爱称"),true)) throw Error("删除别名权限失败");
+    await handleAliasCommand(interaction("aliasdelete", {query:"测试爱称",alias:"测试爱称"},true));
+    if (!replies.pop().content.includes("多首")) throw Error("删除目标歧义处理失败");
+    await handleAutocomplete({ ...mockAutocomplete, commandName:"aliasdelete", memberPermissions:{has:()=>true}, options:{getFocused:()=>({name:"alias",value:"测试爱"}),getString:()=>"id870"} },autocompleteConfig);
+    if (autocompleteResponse[0]?.value !== "測試愛稱") throw Error("删除别名补全失败");
+    await handleAliasCommand(interaction("aliasdelete", {query:"id870",alias:"测试爱称"},true));
+    if (!replies.pop().content.includes("已删除") || searchSongs("测试爱称").length !== 1 || searchSongs("测试爱称")[0].id !== 168) throw Error("删除应只影响指定曲目");
+    if (songAutocomplete("song","测试爱称").some(c=>c.value === "id870")) throw Error("删除后补全未刷新");
+    songAliases.load();
+    if (songAliases.matches(870,normalizeSongQuery("测试爱称"),true)) throw Error("删除未持久化");
+    await handleAliasCommand(interaction("aliasdelete", {query:"id870",alias:"测试爱称"},true));
+    if (!replies.pop().content.includes("没有该别名")) throw Error("不存在的别名删除失败");
+    for (let i=0;i<35;i++) songAliases.add(870,"长别名" + i + "字".repeat(70),"test-user");
+    replies.length = 0;
+    await handleAliasCommand(interaction("aliases",{query:"id870"}));
+    if (replies.length < 2 || replies.some(reply => reply.content.length > 2000 || reply.allowedMentions.parse.length)) throw Error("别名分页或提及限制失败");
+    if (aliasAutocomplete("").length !== 25) throw Error("别名候选上限失败");
+  } finally {
+    songAliases = originalAliases;
+    for (const entry of fs.readdirSync(aliasTestDir)) fs.unlinkSync(path.join(aliasTestDir, entry));
+    fs.rmdirSync(aliasTestDir);
+  }
+
   const ratingBandTests = [
     [1010000, 16.2], [1007500, 15.95], [1000000, 15.45], [990000, 14.95],
     [970000, 14.2], [900000, 10.2], [800000, 8.2], [500000, 0], [499999, 0],
@@ -718,6 +976,8 @@ async function main() {
   validateConfig(config);
   fs.mkdirSync(config.workDir, { recursive: true });
   fs.mkdirSync(config.outputDir, { recursive: true });
+  songAliases = new SongAliasStore(path.join(path.dirname(config.vaultPath), "song-aliases-" + config.guildId + ".json"), normalizeSongQuery);
+  songAliases.load();
 
   let restAgent = null;
   if (config.proxyUrl) {
@@ -1193,6 +1453,7 @@ async function main() {
     }
     if (interaction.commandName === "chart") return handleChart(interaction);
     if (interaction.commandName === "plate") return handlePlate(interaction);
+    if (["aliasadd", "aliasdelete", "aliases", "whatis"].includes(interaction.commandName)) return handleAliasCommand(interaction);
     if (interaction.commandName === "song") return handleSong(interaction);
     if (interaction.commandName === "chartinfo") return handleChartInfo(interaction);
     if (interaction.commandName === "constant") return handleConstant(interaction);
@@ -1248,7 +1509,8 @@ async function main() {
   client.on("interactionCreate", async (interaction) => {
     if (isDuplicate(interaction.id)) return;
     try {
-      if (interaction.isChatInputCommand()) await handleCommand(interaction);
+      if (interaction.isAutocomplete()) await handleAutocomplete(interaction, config);
+      else if (interaction.isChatInputCommand()) await handleCommand(interaction);
       else if (interaction.isModalSubmit() && interaction.customId === "takase:bind") {
         const denied = assertAllowedInteraction(interaction, config);
         if (denied) await interaction.reply({ content: denied, flags: MessageFlags.Ephemeral });
@@ -1258,7 +1520,9 @@ async function main() {
       const message = safeError(error);
       emit("BOT_ERROR", message);
       try {
-        if (interaction.deferred || interaction.replied) await interaction.editReply({ content: "操作失败：" + message, components: [] });
+        if (interaction.isAutocomplete()) {
+          if (!interaction.responded) await interaction.respond([]);
+        } else if (interaction.deferred || interaction.replied) await interaction.editReply({ content: "操作失败：" + message, components: [] });
         else await interaction.reply({ content: "操作失败：" + message, flags: MessageFlags.Ephemeral });
       } catch {}
     }

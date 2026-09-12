@@ -54,6 +54,10 @@ At startup, the bot registers its application commands in the configured server.
 | `/calculate` | Calculate the Rating for a single play. |
 | `/status` | Show the current rendering job and queue. |
 | `/unbind` | Remove the linked account. |
+| `/aliasadd` | Add a song alias; available to all members, with public replies. |
+| `/aliasdelete` | Delete one alias from one song; administrators only. |
+| `/aliases` | List all aliases for a song. |
+| `/whatis` | Find songs by a full or partial alias. |
 
 The account-binding form is visible only to the user who opened it. Score images and some operation results are posted in the configured channel. Linked account credentials are encrypted with Windows DPAPI for the Windows user running the bot.
 
@@ -78,3 +82,20 @@ The Windows build and offline self-tests have been verified. A live Discord conn
 ## Acknowledgements
 
 Special thanks to [@miruklerina](https://twitter.com/miruklerina) for providing valuable artistic support and creating the application icon.
+
+## Song Search and Aliases
+
+All song inputs (`/song`, `/chartinfo`, `/aliasadd`, `/aliasdelete`, `/aliases`) support partial titles, partial aliases, Simplified/Traditional Chinese matching, and autocomplete. Matching ignores case and normalizes full-width characters and repeated whitespace. This is substring matching, without typo correction or pinyin conversion. Autocomplete returns up to 25 choices and submits complete IDs to distinguish identical titles.
+
+Examples:
+
+- `/song query:爱` and `/song query:愛` return the same matching songs.
+- `/chartinfo query:explorer 紫谱` filters MASTER charts; candidates include difficulty.
+- `/aliasadd query:id870 alias:八比特探险` adds an alias. All members may use it; success, duplicate, and candidate replies are public.
+- `/aliases query:id870` lists that song's aliases.
+- `/whatis query:八比特` finds songs with matching aliases. Enter only the alias text.
+- `/aliasdelete query:id870 alias:八比特探险` deletes that song's alias. Administrator permission is checked when executing; both inputs support autocomplete. Deletion requires a complete alias selected or typed explicitly.
+
+Aliases apply immediately and survive restarts. Equivalent Simplified/Traditional or case variants are deduplicated per song. The same alias may refer to multiple songs; all matches are returned. Aliases must contain 1–80 characters and cannot be a numeric Song ID. These commands require no account binding.
+
+Alias records are stored beside `bindings.dat` in `song-aliases-<guild-id>.json`, under `data/` by default (configurable through `TAKASE_DATA_DIR`). Back up this file when migrating. Failed writes preserve existing data; malformed files produce a startup error instead of being cleared. Restart the bot after upgrading to register updated commands.

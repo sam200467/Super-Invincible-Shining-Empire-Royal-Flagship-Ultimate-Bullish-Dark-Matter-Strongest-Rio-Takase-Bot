@@ -14,3 +14,6 @@ takase-discord-bundle.cjs
 config.json
 ongeki-rating.json
 .npm-cache/
+
+song-aliases-*.json
+song-aliases-*.json.*.tmp

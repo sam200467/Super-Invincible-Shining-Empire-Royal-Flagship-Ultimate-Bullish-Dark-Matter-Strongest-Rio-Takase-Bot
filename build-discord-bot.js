@@ -32,6 +32,8 @@ for (const file of [ENTRY, SEA_CONFIG, VAULT_SOURCE]) {
   if (!fs.existsSync(file)) throw new Error("构建文件缺失：" + file);
 }
 
+execFileSync(process.execPath, [path.join(DIR, "test-song-alias-store.cjs")], { cwd: DIR, stdio: "inherit" });
+
 step("1/5 重建分表核心");
 execFileSync(process.execPath, [path.join(DIR, "build.js")], { cwd: DIR, stdio: "inherit" });
 if (!fs.existsSync(ONGEKI_CORE)) throw new Error("分表核心构建失败");

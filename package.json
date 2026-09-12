@@ -4,11 +4,12 @@
   "scripts": {
     "build": "node build-discord-bot.js",
     "start": "node --env-file-if-exists=.env start-bot.cjs",
-    "test": "node test-launcher.cjs && node test-constant-table.cjs"
+    "test": "node test-launcher.cjs && node test-constant-table.cjs && node test-song-alias-store.cjs"
   },
   "dependencies": {
     "discord.js": "^14.27.0",
     "https-proxy-agent": "^7.0.6",
+    "opencc-js": "1.4.2",
     "undici": "^6.28.0"
   },
   "devDependencies": {
