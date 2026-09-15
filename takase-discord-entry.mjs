@@ -1,4 +1,8 @@
+import startupModule from "./discord-startup.cjs";
+const { registerCommands, detail: startupErrorDetail } = startupModule;
 import fs from "node:fs";
+import rioChatModule from "./rio-chat/chat.cjs";
+const { loadSettings: loadRioSettings, createChat: createRioChat } = rioChatModule;
 import aliasStoreModule from "./song-alias-store.cjs";
 const { SongAliasStore } = aliasStoreModule;
 import { Converter } from "opencc-js";
@@ -24,7 +28,7 @@ import {
   TextInputStyle,
 } from "discord.js";
 
-const VERSION = "1.14.4-song-search";
+const VERSION = "1.15.1-rio-chat";
 const GENERATE_COOLDOWN_MS = 60 * 1000;
 // discord.js 默认只给 REST 请求 15 秒。分表图片约 5–6 MiB，经代理上传时
 // 很容易超过默认值并抛出 “This operation was aborted”。
@@ -988,11 +992,21 @@ async function main() {
     emit("BOT_LOG", "已启用本地 HTTP 代理");
   }
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
     rest: restAgent
       ? { agent: restAgent, timeout: DISCORD_REST_TIMEOUT_MS }
       : { timeout: DISCORD_REST_TIMEOUT_MS },
   });
+  let rioChat = null;
+  try {
+    const root = config.rioChatDir || path.join(process.cwd(), "rio-chat");
+    const rio = loadRioSettings(root);
+    if (rio) {
+      rioChat = createRioChat(rio, config, { log: text => emit("BOT_LOG", text) });
+      client.on("messageCreate", message => { void rioChat.handle(message).catch(() => emit("BOT_ERROR", "梨绪聊天发送失败，请检查频道权限")); });
+      emit("BOT_LOG", "梨绪聊天已启用：指定频道@回复，表情按语境概率发送");
+    } else emit("BOT_LOG", "梨绪聊天未启用：请检查EXE同目录rio-chat/config.local.json");
+  } catch { emit("BOT_ERROR", "梨绪聊天配置加载失败；请检查本地配置与资源文件，原有斜杠功能继续运行"); }
   const operationQueue = [];
   const queuedUsers = new Set();
   const recentInteractions = new Map();
@@ -1531,7 +1545,7 @@ async function main() {
   client.on("warn", (warning) => emit("BOT_LOG", safeError(warning)));
   client.once("clientReady", async () => {
     emit("BOT_READY");
-    emit("BOT_LOG", "Discord 核心版本 " + VERSION + "；Gateway 已连接，服务器专用斜杠指令已启用");
+    emit("BOT_LOG", "Discord 核心版本 " + VERSION + "；Gateway 已连接；斜杠指令注册结果见启动日志");
     try { emit("BOT_BINDING_COUNT", (await vaultCall(config, "count")).trim()); }
     catch (error) { emit("BOT_ERROR", safeError(error)); }
   });
@@ -1540,14 +1554,20 @@ async function main() {
   const rest = new REST(restAgent
     ? { version: "10", agent: restAgent, timeout: DISCORD_REST_TIMEOUT_MS }
     : { version: "10", timeout: DISCORD_REST_TIMEOUT_MS }).setToken(config.botToken);
-  await rest.put(Routes.applicationGuildCommands(config.applicationId, config.guildId), { body: COMMANDS });
-  emit("BOT_LOG", "已注册 /help、/bind、/chart、/plate、/song、/level、/calculate、/status、/unbind");
-  await client.login(config.botToken);
+  const commandsRegistered = await registerCommands(() => rest.put(Routes.applicationGuildCommands(config.applicationId, config.guildId), { body: COMMANDS }), { log: text => emit("BOT_LOG", text) });
+  if (commandsRegistered) emit("BOT_LOG", "已注册 /help、/bind、/chart、/plate、/song、/level、/calculate、/status、/unbind");
+  emit("BOT_LOG", "正在连接 Discord Gateway……");
+  try { await client.login(config.botToken); }
+  catch (error) {
+    rioChat?.close();
+    throw new Error("连接 Discord Gateway 失败（" + (startupErrorDetail(error) || "无状态码") + "）：" + safeError(error));
+  }
 
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
     emit("BOT_LOG", "正在断开 Discord 连接……");
+    rioChat?.close();
     client.destroy();
     setTimeout(() => process.exit(0), 250);
   };

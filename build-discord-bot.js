@@ -15,6 +15,7 @@ const DISCORD_CORE = path.join(DIR, "takase-discord-core.exe");
 const ONGEKI_CORE = path.join(DIR, "ongeki-core.exe");
 const VAULT_SOURCE = path.join(DIR, "takase-discord-vault.cs");
 const VAULT_HELPER = path.join(DIR, "takase-discord-vault.exe");
+const RIO_CHAT_SOURCE = path.join(DIR, "rio-chat", "chat.cjs");
 
 function step(text) { console.log("== " + text); }
 
@@ -28,11 +29,14 @@ function injectGatewayProxyHook(bundlePath) {
 }
 
 if (!process.execPath.toLowerCase().endsWith("node.exe")) throw new Error("请用 node 运行本脚本");
-for (const file of [ENTRY, SEA_CONFIG, VAULT_SOURCE]) {
+for (const file of [ENTRY, SEA_CONFIG, VAULT_SOURCE, RIO_CHAT_SOURCE]) {
   if (!fs.existsSync(file)) throw new Error("构建文件缺失：" + file);
 }
 
 execFileSync(process.execPath, [path.join(DIR, "test-song-alias-store.cjs")], { cwd: DIR, stdio: "inherit" });
+// The chat suite skips itself when the local persona and expression data are absent.
+execFileSync(process.execPath, ["--test", path.join(DIR, "rio-chat", "chat.test.cjs")], { cwd: DIR, stdio: "inherit" });
+execFileSync(process.execPath, ["--test", path.join(DIR, "discord-startup.test.cjs")], { cwd: DIR, stdio: "inherit" });
 
 step("1/5 重建分表核心");
 execFileSync(process.execPath, [path.join(DIR, "build.js")], { cwd: DIR, stdio: "inherit" });

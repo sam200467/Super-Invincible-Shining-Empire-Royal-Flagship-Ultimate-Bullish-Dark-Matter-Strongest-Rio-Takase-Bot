@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "enabled": false,
+  "provider": {
+    "name": "deepseek",
+    "baseUrl": "https://api.deepseek.com",
+    "endpoint": "/chat/completions",
+    "model": "deepseek-flash",
+    "apiKey": "",
+    "thinking": {
+      "type": "disabled"
+    },
+    "timeoutMs": 30000,
+    "maxTokens": 512
+  },
+  "personaFile": "persona.md",
+  "examplesFile": "examples.json",
+  "discord": {
+    "trigger": "direct_mention_only",
+    "allowDM": false,
+    "allowedChannelIds": [],
+    "inheritExistingChannelRestrictions": true,
+    "allowedMentions": {
+      "parse": [],
+      "repliedUser": false
+    }
+  },
+  "conversation": {
+    "scope": [
+      "guildId",
+      "channelId",
+      "userId"
+    ],
+    "maxTurns": 6,
+    "ttlMinutes": 30,
+    "persist": false
+  },
+  "limits": {
+    "userCooldownSeconds": 5,
+    "maxConcurrentRequests": 2,
+    "maxInputChars": 1500,
+    "maxReplyChars": 600
+  },
+  "expressions": {
+    "enabled": false,
+    "manifest": "expressions.json"
+  }
+}
