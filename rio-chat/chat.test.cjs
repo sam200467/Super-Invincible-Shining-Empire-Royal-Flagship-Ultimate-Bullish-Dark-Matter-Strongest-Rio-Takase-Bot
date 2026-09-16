@@ -1,7 +1,7 @@
 "use strict";
 const test=require("node:test"), assert=require("node:assert/strict");
 const fs=require("node:fs"),path=require("node:path");
-const {createChat,chooseImage,preference,requestReply}=require("./chat.cjs");
+const {createChat,chooseImage,failureReason,preference,requestReply}=require("./chat.cjs");
 // persona.md, examples.json and expressions.json are deployment content and are not
 // shipped with this repository. Without them the suite cannot run, so skip it on a
 // fresh clone rather than failing the build.
@@ -23,9 +23,12 @@ function msg(user="u",text="<@123> 你好",channel="c"){
 }
 const host={guildId:"g",channelIds:["c","d"],proxyUrl:""};
 test_("probabilities have no image cooldown or dedup",()=>{
- const s=settings();assert.equal(chooseImage(result,s,false,()=>0.39).id,"small_smile");assert.equal(chooseImage(result,s,false,()=>0.4),null);
+ const s=settings();const p=s.manifest.selectionPolicy;
+ assert.equal(chooseImage(result,s,false,()=>p.ordinaryProbability-0.01).id,"small_smile");
+ assert.equal(chooseImage(result,s,false,()=>p.ordinaryProbability),null);
  const emotional={...result,emotion:"proud"};
- assert.ok(chooseImage(emotional,s,false,()=>0.79));assert.equal(chooseImage(emotional,s,false,()=>0.8),null);
+ assert.ok(chooseImage(emotional,s,false,()=>p.clearEmotionProbability-0.01));
+ assert.equal(chooseImage(emotional,s,false,()=>p.clearEmotionProbability),null);
  assert.ok(chooseImage({...result,scene:"explanation",expressionIds:["scarf_calm"]},s,false,()=>0.01));assert.equal(chooseImage(result,s,true,()=>0),null);
  assert.equal(chooseImage({...result,scene:"distress"},s,false,()=>0),null);
  assert.equal(chooseImage({...result,expressionIds:["../../secret","music_taunt"]},s,false,()=>0),null);
@@ -75,7 +78,53 @@ test_("API sends requested model, JSON, nonthinking; rejects invalid data and hi
  const s=settings();let req;
  await requestReply(s,[{role:"user",content:"hi"}],{fetchImpl:async(u,o)=>{req=JSON.parse(o.body);return mock()()}});
  assert.equal(req.model,"deepseek-flash");assert.equal(req.thinking.type,"disabled");assert.equal(req.response_format.type,"json_object");
+ // 不发送 max_tokens，交给服务端默认上限；长度由 limits.maxReplyChars 兜底。
+ assert.ok(!("max_tokens" in req)&&!JSON.stringify(req).includes("maxTokens"));
  await assert.rejects(requestReply(s,[],{fetchImpl:mock({text:s.c.provider.apiKey})}),/敏感/);
  await assert.rejects(requestReply(s,[],{fetchImpl:async()=>({ok:false,status:401})}),/HTTP 401/);
  const m=msg();const chat=createChat(s,host,{fetchImpl:async()=>{throw Error("secret "+s.c.provider.apiKey)}});await chat.handle(m);assert.ok(!JSON.stringify(m.replies).includes(s.c.provider.apiKey));chat.close();
+});
+test_("failure log names the cause and never prints the key",async()=>{
+ const s=settings(),logs=[];
+ const run=async error=>{const chat=createChat(s,host,{log:t=>logs.push(t),fetchImpl:async()=>{throw error}});await chat.handle(msg());chat.close();return logs.at(-1)};
+ const network=Error("fetch failed");network.cause={code:"ECONNREFUSED"};assert.ok((await run(network)).includes("ECONNREFUSED"));
+ const aborted=Error("This operation was aborted");aborted.name="AbortError";assert.ok((await run(aborted)).includes("请求超时"));
+ const http=Error("DeepSeek HTTP 402：Insufficient Balance");assert.ok((await run(http)).includes("HTTP 402：Insufficient Balance"));
+ assert.ok((await run(Error("boom "+s.c.provider.apiKey))).includes("***"));
+ assert.ok(!logs.some(t=>t.includes(s.c.provider.apiKey)));
+ assert.equal(failureReason(Error("DeepSeek返回格式无效：\"\""),undefined),"DeepSeek返回格式无效：\"\"");
+});
+test_("prefill prevents blank replies, a blank retries once then degrades",async()=>{
+ const s=settings();const requests=[];
+ const blank={ok:true,json:async()=>({choices:[{finish_reason:"stop",message:{content:" ".repeat(43)}}]})};
+ const chat=createChat(s,host,{fetchImpl:async(u,o)=>{requests.push(JSON.parse(o.body));return requests.length===1?blank:await mock()()}});
+ const m=msg("a","<@123> 你很擅长音击吗");await chat.handle(m);
+ assert.equal(requests.length,2);
+ assert.deepEqual(requests[0].messages.at(-1),{role:"assistant",content:"{"});
+ assert.ok(m.replies[0].content.includes("哼哼"));
+ let blanks=0;const chat2=createChat(s,host,{log:()=>{},fetchImpl:async()=>{blanks++;return blank}});
+ const m2=msg("b","<@123> 再问一次");await chat2.handle(m2);
+ assert.equal(blanks,3); // JSON 两次 + 纯文本降级一次，都空白才报错
+ assert.equal(m2.replies.length,1);assert.ok(m2.replies[0].content.includes("没能顺利完成"));
+ chat.close();chat2.close();
+});
+test_("two blank JSON replies degrade to a plain-text answer",async()=>{
+ const s=settings();const bodies=[],logs=[];
+ const blank={ok:true,json:async()=>({choices:[{finish_reason:"stop",message:{content:" ".repeat(43)}}]})};
+ const chat=createChat(s,host,{log:t=>logs.push(t),random:()=>0,fetchImpl:async(u,o)=>{
+   bodies.push(JSON.parse(o.body));
+   return bodies.length<=2?blank:{ok:true,json:async()=>({choices:[{finish_reason:"stop",message:{content:"那次是我状态不好，下次一定赢回来。"}}]})};
+ }});
+ const m=msg("a","<@123> 你到底行不行");await chat.handle(m);
+ assert.equal(bodies.length,3);
+ assert.ok(!("response_format" in bodies[2])&&!bodies[2].messages.some(x=>x.role==="assistant"));
+ assert.equal(m.replies[0].content,"那次是我状态不好，下次一定赢回来。");
+ assert.ok(!m.replies[0].files);
+ assert.ok(logs.some(t=>t.includes("已降级为纯文本")));
+ chat.close();
+});
+test_("reply parses when the prefilled brace is not echoed back",async()=>{
+ const s=settings();
+ const r=await requestReply(s,[{role:"user",content:"hi"}],{fetchImpl:async()=>({ok:true,json:async()=>({choices:[{finish_reason:"stop",message:{content:JSON.stringify(result).slice(1)}}]})})});
+ assert.equal(r.text,result.text);
 });

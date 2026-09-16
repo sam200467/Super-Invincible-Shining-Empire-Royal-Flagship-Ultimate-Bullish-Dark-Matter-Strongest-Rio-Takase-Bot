@@ -10,8 +10,7 @@
     "thinking": {
       "type": "disabled"
     },
-    "timeoutMs": 30000,
-    "maxTokens": 512
+    "timeoutMs": 30000
   },
   "personaFile": "persona.md",
   "examplesFile": "examples.json",
