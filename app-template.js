@@ -338,6 +338,50 @@ async function httpFetch(jar, url, { method = "GET", json, form, headers = {}, a
 /* ------------------------------------------------------------------ */
 /* u.otogame API                                                       */
 /* ------------------------------------------------------------------ */
+// 面板失败时返回 {"code":"game-02","message":"user game version unsupported","timestamp":...}。
+// 整段 JSON 甩给用户等于没说，这里按面板自己的错误码表说人话（码表取自 u.otogame 前端常量）。
+// 认不出的码保持原样，方便排查。
+const OTOGAME_ERROR_HINT = Object.freeze({
+  "access-01": "登录状态无效或已过期，请重新登录",
+  "access-02": "需要登录后才能读取数据，请重新登录",
+  "access-04": "登录状态已失效，请重新登录",
+  "access-05": "邮箱或密码错误",
+  "card-01": "这张 Aime 卡已经被别的账号绑定了",
+  "card-02": "找不到该 access code 对应的卡片",
+  "card-03": "该账号还没有可用的主卡",
+  "card-04": "该账号下找不到卡片",
+  "card-05": "没有权限读取这张卡的数据",
+  "game-01": "该账号正在别处游玩或登录，稍后重试",
+  "game-02":
+    "该账号在面板里的数据版本不受支持（面板只认自己支持的版本）。" +
+    "请在机台上用绑定的那张卡游玩最新版，等数据同步后再试；" +
+    "若刚玩过最新版仍是这样，说明面板还没跟上机台版本，只能等面板更新",
+  "game-03": "该账号还没有游戏档案（多半是没绑卡，或者绑卡后没玩过）",
+  "game-04": "游戏内用户名长度不符合要求",
+  "game-05": "游戏内用户名含有不支持的字符",
+  "game-06": "Rival 数量已达上限",
+  "game-07": "不能把自己加为 Rival",
+  "game-08": "对方已经是你的 Rival 了",
+});
+
+// 面板报错统一从这里过一道：认得码就用中文解释，认不出退回原始响应片段。
+function describeApiFailure(status, text) {
+  let code = "";
+  let message = "";
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.code === "string") code = parsed.code;
+      if (typeof parsed.message === "string") message = parsed.message;
+    }
+  } catch {}
+  const detail = code || message
+    ? `${code || "?"}${message ? ": " + message : ""}`
+    : String(text || "").trim().slice(0, 200);
+  const tip = OTOGAME_ERROR_HINT[code];
+  return tip ? `HTTP ${status}：${tip}（${detail}）` : `HTTP ${status}: ${detail}`;
+}
+
 async function apiRating(token) {
   const res = await fetchWithTimeout(RATING_URL, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
@@ -1208,7 +1252,7 @@ async function getThemeProfile(idToken) {
   if (!idToken) throw new Error("登录成功，但没有可用于读取玩家档案的 ID token");
   const response = await apiProfile(idToken);
   if (response.status !== 200) {
-    throw new Error(`玩家档案读取失败 HTTP ${response.status}: ${response.text.slice(0, 300)}`);
+    throw new Error(`玩家档案读取失败 ${describeApiFailure(response.status, response.text)}`);
   }
   let parsed;
   try {
@@ -1870,7 +1914,7 @@ async function fetchCompletionRecordsForDifficulty(token, plate, difficultyId) {
           "请确认该账号已绑定可用的 Aime 卡后重试"
         );
       }
-      throw new Error(`获取${["BASIC", "ADVANCED", "EXPERT", "MASTER"][difficultyId]}版本记录失败 HTTP ${result.status}: ${result.text.slice(0, 240)}`);
+      throw new Error(`获取${["BASIC", "ADVANCED", "EXPERT", "MASTER"][difficultyId]}版本记录失败 ${describeApiFailure(result.status, result.text)}`);
     }
     let parsed;
     try {
@@ -2276,7 +2320,7 @@ async function fetchPagedLevelScoreRecords(token, params, label) {
           "请确认该账号已绑定可用的 Aime 卡后重试"
         );
       }
-      throw new Error(`获取${label}成绩失败 HTTP ${result.status}: ${result.text.slice(0, 240)}`);
+      throw new Error(`获取${label}成绩失败 ${describeApiFailure(result.status, result.text)}`);
     }
     let parsed;
     try { parsed = JSON.parse(result.text); }
@@ -2549,7 +2593,7 @@ async function getRatingData(cfg, job) {
 
     const credentialResult = await apiRating(login.ID_TOKEN);
     if (credentialResult.status !== 200) {
-      throw new Error(`登录后获取数据失败 HTTP ${credentialResult.status}: ${credentialResult.text.slice(0, 300)}`);
+      throw new Error(`登录后获取数据失败 ${describeApiFailure(credentialResult.status, credentialResult.text)}`);
     }
     const credentialParsed = JSON.parse(credentialResult.text);
     if (!credentialParsed?.data?.best_rating_list) {
@@ -2592,7 +2636,7 @@ async function getRatingData(cfg, job) {
   }
   if (r.status !== 200) {
     const hint = r.status === 401 ? "\n  （提示：登录状态失效，可删除同目录 config.json 后重试，会重新弹出登录窗口）" : "";
-    throw new Error(`获取数据失败 HTTP ${r.status}: ${r.text.slice(0, 300)}${hint}`);
+    throw new Error(`获取数据失败 ${describeApiFailure(r.status, r.text)}${hint}`);
   }
   const parsed = JSON.parse(r.text);
   if (!parsed?.data?.best_rating_list) {
@@ -2694,7 +2738,7 @@ async function findRecordForSong(token, job) {
             "请确认该账号已绑定可用的 Aime 卡后重试"
           );
         }
-        throw new Error(`获取单曲记录列表失败 HTTP ${result.status}: ${result.text.slice(0, 240)}`);
+        throw new Error(`获取单曲记录列表失败 ${describeApiFailure(result.status, result.text)}`);
       }
       const parsed = JSON.parse(result.text);
       const { list, pagination } = readRecordPage(parsed);
@@ -2810,7 +2854,7 @@ async function getSongRecordData(job) {
             "请确认该账号已绑定可用的 Aime 卡后重试"
           );
         }
-        throw new Error(`获取单曲详细成绩失败 HTTP ${result.status}: ${result.text.slice(0, 240)}`);
+        throw new Error(`获取单曲详细成绩失败 ${describeApiFailure(result.status, result.text)}`);
       }
       const parsed = JSON.parse(result.text);
       const detailScores = normalizeSongScores(parsed);
@@ -2872,6 +2916,23 @@ async function runSongDetailJobData(job) {
     console.log(`[3/3] ✓ 已保存: ${outPath}（${Math.round(image.length / 1024)} KB）`);
     console.log(`SONG_OUTPUT_FILE:${outPath}`);
   }
+  // 结构化摘要：图片本身没法被聊天模型读到，但这份数据可以。
+  // 只放图上已经画出来的东西（各难度技术分与 AB/FC/FB），不放账号信息。
+  console.log(`SONG_SUMMARY:${JSON.stringify({
+    songId: song.id,
+    title: song.name,
+    playerName: job.playerName || "",
+    found: recordData.found === true,
+    // 注意这里读的是 normalizeSongScores 归一化之后的形状（camelCase），
+    // 不是原始 API 的 snake_case。
+    scores: (recordData.scores || []).map((score) => ({
+      difficultyId: score.difficulty,
+      techScore: score.techScoreMax,
+      allBreak: score.isAllBreak === true,
+      fullCombo: score.isFullCombo === true,
+      fullBell: score.isFullBell === true,
+    })),
+  })}`);
   console.log("SONG_JOB_DONE");
 }
 
@@ -3054,6 +3115,27 @@ async function runJobData(job) {
     console.log(`[3/3] ✓ 已保存: ${outPath}（${Math.round(combined.length / 1024)} KB）`);
     console.log(`OUTPUT_FILE:${outPath}`);
   }
+  // 同 SONG_SUMMARY：给聊天侧一份图上数据的摘要（RATING、三榜曲数与榜首）
+  const ratingSnapshot = (() => { try { return JSON.parse(jsonText)?.data || null; } catch { return null; } })();
+  const bestList = ratingSnapshot?.best_rating_list || [];
+  console.log(`CHART_SUMMARY:${JSON.stringify({
+    playerName,
+    level: profile.level,
+    playCount: profile.playCount,
+    rating: ratingSnapshot?.rating ? Math.round(ratingSnapshot.rating) / 1000 : null,
+    counts: {
+      best: bestList.length,
+      new: (ratingSnapshot?.best_new_rating_list || []).length,
+      platinum: (ratingSnapshot?.p_score_rating_list || []).length,
+    },
+    top: bestList.slice(0, 3).map((entry) => ({
+      title: entry?.music?.name || "",
+      techScore: entry?.score ?? null,
+      rating: entry?.rating != null ? Math.round(entry.rating) / 1000 : null,
+      allBreak: entry?.is_all_break === true,
+      fullBell: entry?.is_full_bell === true,
+    })),
+  })}`);
   console.log("JOB_DONE");
 }
 

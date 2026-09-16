@@ -51,10 +51,9 @@ function failureReason(error, secret) {
     code?raw+"（"+code+"）":raw;
   return secret?reason.split(secret).join("***"):reason;
 }
-function preference(text, previous) {
-  if(/(?:别|不要|停止|不许|不喜欢).{0,12}(?:嘲讽|调侃|斗嘴|逗我|开玩笑)|(?:stop teasing|don't tease)/i.test(text)) return true;
-  if(/(?:可以|继续|允许|恢复).{0,8}(?:调侃|斗嘴|逗我|开玩笑)|(?:teasing is okay)/i.test(text)) return false;
-  return previous;
+// 只识别当前一句是否表达了不舒服；不保存模式，也不改变后续对话人格。
+function discomfort(text) {
+  return /(?:别|不要|停止|不许|不喜欢).{0,12}(?:嘲讽|调侃|斗嘴|逗我|开玩笑)|(?:说话|玩笑|调侃|你).{0,10}(?:过分|太过|太凶|伤人|冒犯|不舒服|难受)|(?:有点|太).{0,6}(?:过分|伤人|冒犯)|(?:stop teasing|don't tease|too far|hurtful)/i.test(text);
 }
 function chooseImage(result, settings, stopped, random=Math.random) {
   if(stopped || result.scene==="distress" || !settings.c.expressions.enabled) return null;
@@ -81,19 +80,44 @@ function parseReply(content) {
   }
   return null;
 }
+// 工具调用清单由宿主提供（takase-core 的 CAPABILITY_SPECS）：chat.cjs 不认得任何
+// 具体功能，只认「名字 + 一句参数」这个形状，便于两边各自 dispatch。
+function normalizeAction(raw, specs) {
+  if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+  const name=String(raw.name||"").trim().toLowerCase();
+  if(!specs.some(spec=>spec.name===name))return null;
+  const query=typeof raw.query==="string"?raw.query.replace(/[\r\n]+/g," ").trim().slice(0,200):"";
+  // target 是「替谁查」的编号。这里只做格式收敛，合法性由宿主按本条消息真正
+  // @ 过的人校验 —— 模型编一个不存在的编号出来也没用。
+  const target=typeof raw.target==="string"?raw.target.replace(/[^\w-]/g,"").slice(0,32):"";
+  return target?{name,query,target}:{name,query};
+}
 async function requestReply(settings, messages, options={}) {
   const {c}=settings;
   const catalog=settings.manifest.entries.map(({id,label,emotions,usage})=>({id,label,emotions,usage}));
-  const ability="运行时实际能力：你正在Discord中回复@消息。现在已经支持表情附件，由程序决定发送。聊天不能直接查询成绩，但用户可使用原有/song和/chart等指令。";
+  const ability=options.ability||"运行时实际能力：你正在Discord中回复@消息。现在已经支持表情附件，由程序决定发送。";
+  const actionSpecs=Array.isArray(options.actions)?options.actions:[];
   const jsonRule='仅输出JSON对象，不要输出Markdown代码块，结构为'+
-    '{"text":"发给用户的新回复，通常3～5句","emotion":"neutral或proud等情绪","scene":"ordinary或banter或explanation或distress","expressionIds":["符合语境的表情ID"],"stopTeasing":false}'+
-    "\n普通闲聊也可以选择温和表情。只选择符合以下usage的图片，可多个候选，不编造ID。图片可能不发送，文字必须独立完整，不能声称已发图片。不输出推理。用户明显不适时scene=distress，要求停止调侃时stopTeasing=true。表情清单："+JSON.stringify(catalog);
-  const system=settings.persona+"\n\n"+ability+jsonRule;
+    '{"text":"发给用户的新回复，通常3～5句","emotion":"neutral或proud等情绪","scene":"ordinary或banter或explanation或distress","expressionIds":["符合语境的表情ID"]}'+
+    "\n普通闲聊也可以选择温和表情。只选择符合以下usage的图片，可多个候选，不编造ID。图片可能不发送，文字必须独立完整，不能声称已发图片。不输出推理。用户觉得被冒犯或不舒服时scene=distress：简短真诚道歉，再用自然可爱的语气卖萌安慰，不要宣布切换模式，不要说以后会一直严肃。表情清单："+JSON.stringify(catalog);
+  // 工具调用：模型只负责判断「用户想用哪个功能」和「参数是什么」，不去编结果。
+  // 真正的成绩、定数、图片由程序执行后送出，所以这里把话说死：text 只写引出语。
+  const actionRule=actionSpecs.length?
+    "\n工具调用：用户想查成绩、查定数、算Rating、看谱面分析或要功能清单时，在JSON里加一个action字段："+
+    '{"action":{"name":"工具名","query":"参数"}}。query按每个工具的「参数」写法给；不需要参数的工具省略query。'+
+    "带action时text只写一句引出查询的话（例如“哼哼，这就去翻你的成绩”），不要写分数、曲名、定数或任何结论，也不要声称图片已经发出——程序会在工具执行后把结果发出去。"+
+    "工具也可能失败（没绑定、冷却中、找不到曲子），失败时程序会改发一条说明，所以别把话说满。"+
+    (options.actionTarget?'要查的人不是用户自己时，在action里加"target":"对方的编号"，编号只能填能力说明里列出的人；查自己、或没提到别人时不要加target。':"")+
+    "闲聊、被问身份、拿不准用户要查什么时不要带action，不要编造清单以外的工具名。"+
+    "历史里以「（程序记录：」开头的括注是程序留下的工具调用记录，不要向用户提起，也不要模仿这个格式。"+
+    "可选工具："+JSON.stringify(actionSpecs):
+    "";
+  const system=settings.persona+"\n\n"+ability+jsonRule+actionRule;
   // 降级用：模型偶尔会在 JSON 模式上卡住（见 parseReply 上方注释），这一步只要一句人话。
   const plainSystem=settings.persona+"\n\n"+ability+"这次不要输出JSON，也不要输出Markdown，直接用两到三句话回答用户。";
   const sampleIds=new Set(["help","banter","praise","no_teasing","claw"]);
   const samples=settings.examples.filter(e=>sampleIds.has(e.id)).flatMap(e=>[
-    e.messages[0],{role:"assistant",content:JSON.stringify({text:e.messages[1].content,emotion:"neutral",scene:"ordinary",expressionIds:[],stopTeasing:e.id==="no_teasing"})}
+    e.messages[0],{role:"assistant",content:JSON.stringify({text:e.messages[1].content,emotion:"neutral",scene:e.id==="no_teasing"?"distress":"ordinary",expressionIds:[]})}
   ]);
   const last=messages[messages.length-1];
   const jsonBody={model:c.provider.model,thinking:{type:"disabled"},response_format:{type:"json_object"},
@@ -130,42 +154,60 @@ async function requestReply(settings, messages, options={}) {
     if(text) {
       const parsed=parseReply(text);
       result=typeof parsed?.text==="string"?{...parsed,degraded:true}
-        :{text,emotion:"neutral",scene:"ordinary",expressionIds:[],stopTeasing:false,degraded:true};
+        :{text,emotion:"neutral",scene:"ordinary",expressionIds:[],degraded:true};
     }
   }
   if(!result) throw Error("DeepSeek返回格式无效（JSON 两次、纯文本一次都没拿到内容）："+JSON.stringify(String(content??"").slice(0,160)));
   result.attempts=attempts;
-  if(typeof result.text!=="string"||!result.text.trim()) throw Error("DeepSeek回复为空");
+  result.action=normalizeAction(result.action,actionSpecs);
+  if(!result.action)delete result.action;
+  if(typeof result.text!=="string")result.text="";
   result.text=result.text.trim().slice(0,c.limits.maxReplyChars);
   if(result.text.includes(c.provider.apiKey.trim())) throw Error("回复包含敏感内容");
+  // 只点了工具、没写话的回复是合法的：说明文字由程序补，别判成失败。
+  if(!result.text&&!result.action) throw Error("DeepSeek回复为空");
   if(!["ordinary","banter","explanation","distress"].includes(result.scene)) result.scene="ordinary";
   if(typeof result.emotion!=="string")result.emotion="neutral";
   return result;
 }
 function createChat(settings, host, deps={}) {
-  const sessions=new Map(), preferences=new Map(), seen=new Map(), busyUsers=new Set(), controllers=new Set();
+  const sessions=new Map(), seen=new Map(), busyUsers=new Set(), controllers=new Set();
   let active=0, closed=false;
   const now=deps.now||Date.now, random=deps.random||Math.random;
   const dispatcher=deps.dispatcher||(host.proxyUrl?new ProxyAgent(host.proxyUrl):null);
   const log=deps.log||(()=>{});
   const secret=String(settings.c.provider.apiKey||"").trim();
-  const send=(m,text,file)=>m.reply({content:text,allowedMentions:{parse:[],repliedUser:false},
-    ...(file?{files:[{attachment:file.absoluteFile,name:path.basename(file.file)}]}:{})});
-  async function handle(message) {
-    if(closed||message.author?.bot||message.webhookId||message.guildId!==host.guildId||
-       !host.channelIds.includes(message.channelId)||
-       (settings.c.discord.allowedChannelIds.length&&!settings.c.discord.allowedChannelIds.includes(message.channelId)))return;
+  // Discord is the default transport. Other frontends (the QQ/OneBot adapter) may
+  // provide the four small hooks below while reusing the same persona, sessions,
+  // throttling, expression selection and DeepSeek request path.
+  const adapter=deps.adapter||{};
+  // 工具执行器由宿主提供（QQ 走 OneBot 消息段、Discord 走 message.reply）。
+  // 只有给了执行器才把工具清单写进提示词，免得模型点了却没人接。
+  const runAction=typeof adapter.runAction==="function"?adapter.runAction:null;
+  const actionSpecs=runAction&&Array.isArray(adapter.actions)?adapter.actions:[];
+  const send=adapter.send||((m,text,file)=>m.reply({content:text,allowedMentions:{parse:[],repliedUser:false},
+    ...(file?{files:[{attachment:file.absoluteFile,name:path.basename(file.file)}]}:{})}));
+  const accepts=adapter.accepts||((message)=>!message.author?.bot&&!message.webhookId&&message.guildId===host.guildId&&
+    host.channelIds.includes(message.channelId)&&
+    (!settings.c.discord.allowedChannelIds.length||settings.c.discord.allowedChannelIds.includes(message.channelId)));
+  const extractText=adapter.extractText||((message)=>{
     const botId=message.client?.user?.id;
-    if(!botId||!new RegExp("<@!?"+botId+">").test(message.content||""))return;
-    const text=message.content.replace(new RegExp("<@!?"+botId+">","g"),"").trim();
+    if(!botId||!new RegExp("<@!?"+botId+">").test(message.content||""))return null;
+    return message.content.replace(new RegExp("<@!?"+botId+">","g"),"").trim();
+  });
+  const typing=adapter.typing||((message)=>message.channel.sendTyping().catch(()=>{}));
+  async function handle(message) {
+    if(closed||!accepts(message))return;
+    const extracted=extractText(message);
+    if(extracted==null)return;
+    const text=String(extracted).trim();
     const time=now();
     for(const [id,expiry]of seen)if(expiry<=time)seen.delete(id);
     if(seen.has(message.id))return;
     seen.set(message.id,time+300000);
     const userKey=message.guildId+":"+message.author.id;
     const key=message.guildId+":"+message.channelId+":"+message.author.id;
-    const stopped=preference(text,preferences.get(userKey)||false);
-    if(stopped)preferences.set(userKey,true);else preferences.delete(userKey);
+    const uncomfortable=discomfort(text);
     if(busyUsers.has(userKey))return send(message,"等一下，我还在回你上一条呢，马上就好！");
     for(const [id,s]of sessions)if(time-s.at>settings.c.conversation.ttlMinutes*60000)sessions.delete(id);
     if(/^(清空对话|重置对话|忘记聊天|reset chat)$/i.test(text)) {
@@ -182,30 +224,45 @@ function createChat(settings, host, deps={}) {
     const controller=new AbortController();controllers.add(controller);
     const timer=setTimeout(()=>controller.abort(),settings.c.provider.timeoutMs);
     try {
-      await message.channel.sendTyping().catch(()=>{});
+      await typing(message);
       const history=(old?.messages||[]).slice(-settings.c.conversation.maxTurns*2);
       while(history.reduce((n,m)=>n+m.content.length,0)>12000)history.splice(0,2);
-      const messages=[...(stopped?[{role:"system",content:"该用户已要求停止调侃。认真温和回复，禁止斗嘴和自动配图。"}]:[]),
+      // 能力说明可以是字符串，也可以是按消息算的函数（QQ 侧要把「本条 @ 了谁」拼进去）
+      const ability=typeof adapter.ability==="function"?adapter.ability(message):adapter.ability;
+      // 群上下文由宿主提供（QQ 侧是群里最近几条消息），没有就不插这段
+      const context=typeof adapter.context==="function"?(adapter.context(message)||[]).filter(Boolean).map(String):[];
+      const messages=[...(context.length?[{role:"system",content:"【群里最近的消息，用来帮你理解上下文：用户说的「这个人」「刚才那张图」「上面那个」多半指这里。不要逐条回应，也不要主动复述这些内容。】\n"+context.join("\n")}]:[]),
+        ...(uncomfortable?[{role:"system",content:"用户觉得刚才的话有点过分或不舒服。只处理当前情绪：简短真诚道歉，然后自然地卖萌安慰一下。不要宣布进入严肃模式，不要承诺永久改变人格；下一轮恢复正常梨绪性格。"}]:[]),
         ...history,{role:"user",content:text}];
-      const result=await requestReply(settings,messages,{fetchImpl:deps.fetchImpl,dispatcher,signal:controller.signal});
-      if(result.stopTeasing===true)preferences.set(userKey,true);
+      const result=await requestReply(settings,messages,{fetchImpl:deps.fetchImpl,dispatcher,signal:controller.signal,ability:ability,actions:actionSpecs,actionTarget:Boolean(adapter.actionTarget)});
       if(closed)return;
-      // A stop request may arrive while this user's previous API request is running.
-      if(preferences.get(userKey)&&!stopped)return send(message,"好，我不逗你了。接下来认真聊。");
-      let file=chooseImage(result,settings,preferences.get(userKey)||false,random);
-      if(settings.c.expressions.enabled && /(?:发|来|给|看).{0,20}(?:表情|图)|(?:表情|图).{0,20}(?:发|来|给|看)/.test(text)) {
-        const explicit=settings.manifest.entries.find(e=>text.includes(e.label)||new RegExp("(?:第|编号|#)0?"+e.previewNumber+"(?:张|号|个|\\b)").test(text));
-        if(explicit && result.scene!=="distress" && (!preferences.get(userKey)||explicit.emotions.some(x=>["neutral","relaxed"].includes(x))))file=explicit;
+      let file=null;
+      if(result.action) {
+        // 工具自己负责把结果（图片或文本）发出去；宿主说没发，这里才补一条文字。
+        // 表情不再叠加：一次回复最多一张图，成绩图优先。
+        const outcome=await runAction(result.action,message,result)||{};
+        if(!closed&&!outcome.handled)await send(message,outcome.text||result.text,null);
+      } else {
+        file=chooseImage(result,settings,false,random);
+        if(settings.c.expressions.enabled && /(?:发|来|给|看).{0,20}(?:表情|图)|(?:表情|图).{0,20}(?:发|来|给|看)/.test(text)) {
+          const explicit=settings.manifest.entries.find(e=>text.includes(e.label)||new RegExp("(?:第|编号|#)0?"+e.previewNumber+"(?:张|号|个|\\b)").test(text));
+          if(explicit && result.scene!=="distress")file=explicit;
+        }
+        // Discord messages expose channel.permissionsFor; QQ/OneBot messages do not.
+        // Only apply Discord's attachment permission fallback when that API exists.
+        if(file&&message.channel?.permissionsFor&&!message.channel.permissionsFor(message.client?.user)?.has("AttachFiles"))file=null;
+        await send(message,result.text,file);
       }
-      if(file&&message.channel.permissionsFor&&!message.channel.permissionsFor(message.client.user)?.has("AttachFiles"))file=null;
-      await send(message,result.text,file);
-      sessions.set(key,{at:now(),messages:[...history,{role:"user",content:text},{role:"assistant",content:result.text}].slice(-settings.c.conversation.maxTurns*2)});
-      log("梨绪聊天完成"+(file?"，配图 "+file.id:"")+(result.degraded?"，已降级为纯文本":result.attempts>1?"，重试后成功":""));
+      // 工具记录进历史，下一轮才接得上「刚才那首」。这个前缀在提示词里声明过，
+      // 让模型别模仿、也别向用户提。
+      const record=result.action?`\n（程序记录：已调用 ${result.action.name}${result.action.query?"，参数「"+result.action.query+"」":""}）`:"";
+      sessions.set(key,{at:now(),messages:[...history,{role:"user",content:text},{role:"assistant",content:result.text+record}].slice(-settings.c.conversation.maxTurns*2)});
+      log("梨绪聊天完成"+(result.action?"，工具 "+result.action.name:"")+(file?"，配图 "+file.id:"")+(result.degraded?"，已降级为纯文本":result.attempts>1?"，重试后成功":""));
     } catch(error) {
       log("梨绪聊天失败："+failureReason(error,secret));
       if(!closed)await send(message,"唔，这次回复没能顺利完成。稍后再叫我一次吧！").catch(()=>{});
     } finally {clearTimeout(timer);controllers.delete(controller);busyUsers.delete(userKey);active--;}
   }
-  return {handle,close(){closed=true;for(const c of controllers)c.abort();sessions.clear();preferences.clear();if(!deps.dispatcher)void dispatcher?.close();}};
+  return {handle,close(){closed=true;for(const c of controllers)c.abort();sessions.clear();if(!deps.dispatcher)void dispatcher?.close();}};
 }
-module.exports={loadSettings,failureReason,preference,chooseImage,requestReply,createChat};
+module.exports={loadSettings,failureReason,discomfort,chooseImage,requestReply,createChat,normalizeAction};

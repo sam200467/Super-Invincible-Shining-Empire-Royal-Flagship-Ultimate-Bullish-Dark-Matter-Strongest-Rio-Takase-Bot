@@ -34,6 +34,7 @@ for (const file of [ENTRY, SEA_CONFIG, VAULT_SOURCE, RIO_CHAT_SOURCE]) {
 }
 
 execFileSync(process.execPath, [path.join(DIR, "test-song-alias-store.cjs")], { cwd: DIR, stdio: "inherit" });
+execFileSync(process.execPath, [path.join(DIR, "test-takase-core.cjs")], { cwd: DIR, stdio: "inherit" });
 // The chat suite skips itself when the local persona and expression data are absent.
 execFileSync(process.execPath, ["--test", path.join(DIR, "rio-chat", "chat.test.cjs")], { cwd: DIR, stdio: "inherit" });
 execFileSync(process.execPath, ["--test", path.join(DIR, "discord-startup.test.cjs")], { cwd: DIR, stdio: "inherit" });
