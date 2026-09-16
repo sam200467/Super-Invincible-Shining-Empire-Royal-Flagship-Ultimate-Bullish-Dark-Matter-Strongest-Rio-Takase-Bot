@@ -1,0 +1,5 @@
+{
+  "main": "dist/takase-qq-bundle.cjs",
+  "output": "takase-qq-sea.blob",
+  "disableExperimentalSEAWarning": true
+}

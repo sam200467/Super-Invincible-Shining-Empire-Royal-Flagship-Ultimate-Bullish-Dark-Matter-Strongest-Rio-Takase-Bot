@@ -17,3 +17,9 @@ ongeki-rating.json
 
 song-aliases-*.json
 song-aliases-*.json.*.tmp
+
+# QQ 版：运行时配置与产物
+qq/qq-config.json
+qq/dist/
+qq/*.vbs
+takase-qq-bundle.cjs

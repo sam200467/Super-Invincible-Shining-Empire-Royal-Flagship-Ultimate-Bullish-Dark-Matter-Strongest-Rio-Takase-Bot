@@ -3,14 +3,16 @@
   "private": true,
   "scripts": {
     "build": "node build-discord-bot.js",
+    "build:qq": "node qq/build-qq-bot.js",
     "start": "node --env-file-if-exists=.env start-bot.cjs",
-    "test": "node test-launcher.cjs && node test-constant-table.cjs && node test-song-alias-store.cjs && node --test discord-startup.test.cjs && node --test rio-chat/chat.test.cjs"
+    "test": "node test-launcher.cjs && node test-constant-table.cjs && node test-song-alias-store.cjs && node --test discord-startup.test.cjs && node --test rio-chat/chat.test.cjs && node test-takase-core.cjs && node --test qq/test-qq-onebot.cjs && node --test qq/test-qq-entry.cjs"
   },
   "dependencies": {
     "discord.js": "^14.27.0",
     "https-proxy-agent": "^7.0.6",
     "opencc-js": "1.4.2",
-    "undici": "^6.28.0"
+    "undici": "^6.28.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "esbuild": "^0.25.9"

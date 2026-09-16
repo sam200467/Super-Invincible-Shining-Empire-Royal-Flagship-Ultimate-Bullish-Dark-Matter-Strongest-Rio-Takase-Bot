@@ -72,6 +72,8 @@ Chat reads only messages that mention the bot in a channel it already serves. It
 ## Source Layout
 
 - `takase-discord-entry.mjs`: Discord commands, interactions, job queue, and calls to the rendering core.
+- `takase-core.cjs`: platform-independent core (song search, constants, credential vault, rendering entry points) shared by both front ends.
+- `qq/`: optional QQ front end (NapCat / OneBot 11); see `qq/README.md`.
 - `discord-startup.cjs`: slash command registration with retry and safe error reporting.
 - `rio-chat/`: optional DeepSeek-backed chat module; disabled unless configured locally.
 - `app-template.js`: account sign-in, score retrieval, data processing, and rendering logic.
@@ -88,6 +90,20 @@ Chat reads only messages that mention the bot in a channel it already serves. It
 The public release uses the included Noto fonts covered by the accompanying OFL license texts, so its appearance may differ slightly from the author's local build. Game images, song metadata, fonts, and integration scripts retain their respective sources and rights. Do not treat third-party material as an original asset of this repository. The project does not currently declare a single project-wide open-source license.
 
 The Windows build and offline self-tests have been verified. A live Discord connection and score lookup require valid deployment configuration and account credentials.
+
+## QQ Version (Optional)
+
+`qq/` contains a second, independent front end that runs the same bot on a **personal QQ account** through [NapCat](https://github.com/NapNeko/NapCatQQ) (NTQQ headless + OneBot 11). It is not required for the Discord bot, and it does not use the official QQ bot platform.
+
+**Read this first:** running a personal account through a third-party protocol client violates Tencent's terms of service. The account can be warned, frozen, or banned. Use a secondary account, run it from a home connection, and never route the QQ login through a proxy.
+
+- Shares `takase-core.cjs` with the Discord front end; the two front ends are otherwise independent.
+- Commands use a `#` prefix in groups (`#单曲`, `#分表`, `#等级`, …); `/` and full-width `＃` also work, and private chats may omit the prefix.
+- Account binding runs in private chat as a two-step state machine, because QQ has no modals. The password message is meant to be recalled manually afterwards; the bot never echoes it and never writes it to logs.
+- `qq/README.md` is the full deployment guide (written in Chinese, matching this front end's audience).
+- Build and test with `npm run build:qq`. It embeds the rendering core, so build that first with `npm run build`.
+
+Mentioning the bot with plain language also works: the chat module picks a tool, the program generates the image, and the caption is written in character.
 
 ## Acknowledgements
 
