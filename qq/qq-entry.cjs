@@ -36,6 +36,12 @@ function validateConfig(config) {
   if (String(config.proxyUrl || "").trim() && !/^https?:\/\/[^\s]+$/i.test(String(config.proxyUrl).trim())) {
     throw new Error("代理地址必须以 http:// 或 https:// 开头");
   }
+  if (config.aliasDeleteQqs !== undefined) {
+    if (!Array.isArray(config.aliasDeleteQqs)) throw new Error("aliasDeleteQqs 必须是 QQ 号数组");
+    for (const id of config.aliasDeleteQqs) {
+      if (!/^\d{5,11}$/.test(String(id).trim())) throw new Error("aliasDeleteQqs 里的 QQ 号格式不正确：" + id);
+    }
+  }
 }
 
 // ── 命令解析 ────────────────────────────────────────────────────────
@@ -101,6 +107,11 @@ function createQqBot(config, deps = {}) {
   const log = deps.log || ((text) => core.emit("BOT_LOG", text));
   const now = deps.now || Date.now;
   const logError = (error) => core.emit("BOT_ERROR", core.safeError(error));
+
+  // 删除别名的白名单：**只认名单里的 QQ 号**，不看群角色，而且只走 #删除别名 这条命令。
+  // 名单放在 qq-config.json 而不是源码里 —— qq-entry.cjs 会同步进公开仓库，
+  // 写死等于把号一起公开。没配就是谁都不能删（失败往安全的方向倒）。
+  const aliasDeleteQqs = new Set((config.aliasDeleteQqs || []).map((id) => String(id).trim()));
 
   const sessions = new Map();     // user_id -> {state, email, attempts, startedAt, groupId}
   const queue = [];
@@ -195,7 +206,7 @@ function createQqBot(config, deps = {}) {
         const sent = await onebot.call("send_group_msg", { group_id: Number(event.group_id), message });
         // 图也算群上下文。记的不只是「出了张图」——带上生成它用的数据摘要
         // （RATING、各难度技术分…），模型才能回答「他这首歌打多少分」这种追问。
-        rememberGroupMessage(event.group_id, "梨绪", core.describeImage(kind, image, caption) + "（图片）");
+        rememberGroupMessage(event.group_id, "梨绪", core.describeImage(kind, image, caption) + "（图片）", sent?.message_id);
         return sent;
       }
       return await onebot.call("send_private_msg", { user_id: Number(event.user_id), message });
@@ -270,7 +281,7 @@ function createQqBot(config, deps = {}) {
     }).join("").replace(/\s+/g, " ").trim();
   }
 
-  function rememberGroupMessage(groupId, who, text) {
+  function rememberGroupMessage(groupId, who, text, messageId) {
     if (!groupId) return;
     const line = String(text || "").replace(/\s+/g, " ").trim().slice(0, 120);
     if (!line) return;
@@ -278,6 +289,8 @@ function createQqBot(config, deps = {}) {
     list.push({ at: now(), who: String(who || "?").slice(0, 20), text: line });
     while (list.length > CONTEXT_MESSAGES) list.shift();
     groupContext.set(String(groupId), list);
+    // 12 条窗口外的消息会在下面按 id 另存一份，供「引用 + @我」时回捞
+    archiveForQuote(groupId, messageId, who, text);
   }
 
   function groupContextText(groupId, skipLast = 0) {
@@ -293,6 +306,67 @@ function createQqBot(config, deps = {}) {
       lines.unshift(line);
     }
     return lines;
+  }
+
+  // ── 被引用的消息 ──────────────────────────────────────────────────
+  // 「引用 + @我」问的是引用那条，而它多半早就滑出 12 条窗口了。模型只看得到
+  // 「[回复]」时会当成没发生过（「我什么时候推荐过歌？」），所以引用谁就补谁：
+  // 先翻自己留的底（零延迟、包含 bot 自己发过的），再问 NapCat 要。
+  const quotedArchive = new Map();          // "groupId:messageId" -> {at, gid, who, text}
+  const ARCHIVE_TTL_MS = 60 * 60 * 1000;    // 留一小时，够接住「你刚才为什么…」
+  const ARCHIVE_PER_GROUP = 400;            // 每群最多留几条
+  const QUOTED_MAX_CHARS = 400;             // 送进提示词的长度上限（比上下文那条宽）
+
+  function archiveForQuote(groupId, messageId, who, text) {
+    if (!messageId) return;
+    const gid = String(groupId);
+    const body = String(text || "").replace(/\s+/g, " ").trim().slice(0, QUOTED_MAX_CHARS);
+    if (!body) return;
+    quotedArchive.set(gid + ":" + String(messageId), { at: now(), gid, who: String(who || "?").slice(0, 20), text: body });
+    // 顺手清理：先删过期的，再删本群超量的最旧几条（Map 按插入顺序遍历）
+    let kept = 0;
+    for (const [key, item] of quotedArchive) {
+      if (now() - item.at > ARCHIVE_TTL_MS) quotedArchive.delete(key);
+      else if (item.gid === gid && ++kept > ARCHIVE_PER_GROUP) quotedArchive.delete(key);
+    }
+  }
+
+  // 引用目标在提示词里的那一行。bot 自己的话要标明 —— 「这是你自己说的」和
+  // 「这是别人说的」对模型是两件事（截图里那句「我什么时候推荐过歌」就是这么来的）。
+  // get_msg 只给昵称，所以「是不是我」得单独判，不能靠名字。
+  function quotedLine(who, at, text, isSelf) {
+    const name = isSelf ? "梨绪（我自己）" : String(who || "某人");
+    return new Date(Number(at) || now()).toTimeString().slice(0, 5) + " " + name + "：" + text;
+  }
+
+  function replyIdOf(event) {
+    if (Array.isArray(event.message)) {
+      const segment = event.message.find((item) => item?.type === "reply");
+      return segment?.data?.id ? String(segment.data.id) : "";
+    }
+    const match = String(event.raw_message || "").match(/\[CQ:reply,[^\]]*\bid=(\d+)/);
+    return match ? match[1] : "";
+  }
+
+  // 拿不到就当没引用：宁可少一段上下文，也不能因为读不到引用就把回复卡住
+  async function quotedContext(event) {
+    const id = replyIdOf(event);
+    if (!id || !/^\d+$/.test(id) || !event.group_id) return "";
+    const cached = quotedArchive.get(String(event.group_id) + ":" + id);
+    if (cached) return quotedLine(cached.who, cached.at, cached.text, cached.who === "梨绪");
+    try {
+      const data = await onebot.call("get_msg", { message_id: Number(id) });
+      // 只认本群的消息：把别的群的内容当上下文，等于往提示词里塞不相干的东西
+      if (data?.group_id && String(data.group_id) !== String(event.group_id)) return "";
+      const text = summarizeSegments(data?.message, config.qqNumber).slice(0, QUOTED_MAX_CHARS);
+      if (!text) { log("引用的消息没有可读内容（id=" + id + "）"); return ""; }
+      const sender = data?.sender || {};
+      return quotedLine(sender.card || sender.nickname || sender.user_id || "某人", Number(data?.time) * 1000, text,
+        String(sender.user_id) === String(config.qqNumber));
+    } catch (error) {
+      log("引用消息读取失败（" + id + "）：" + core.safeError(error));
+      return "";
+    }
   }
 
   // ── @ 到的人 ──────────────────────────────────────────────────────
@@ -457,7 +531,7 @@ function createQqBot(config, deps = {}) {
       "#等级 <14/14+/14.1/ABFB> [页码]　查询等级成绩",
       "#计算 <定数> <技术分> <铃铛> <连击>　计算单曲 Rating",
       "#添加别名 <曲目> | <别名>　添加歌曲别名",
-      "#删除别名 <曲目> | <别名>　管理员删除别名",
+      "#删除别名 <曲目> | <别名>　删除别名（仅指定账号，且只能在群里用这条指令）",
       "#查看别名 <曲目>　查看歌曲全部别名",
       "#是什么歌 <别名>　按别名反查歌曲",
       "#允许查询 / #禁止查询　开/关「别人能不能查我的成绩」（默认关）",
@@ -466,7 +540,9 @@ function createQqBot(config, deps = {}) {
       "",
       "绑定必须私聊我进行，请不要把邮箱密码发到群里。",
       "首次使用请先 #绑定。",
-      "也可以直接 @我 用大白话提问，例如「@我 帮我查一下 id870 全难度成绩」。",
+      "也可以直接 @我 用大白话提问，不用背上面的格式 —— 查分、查定数、算 Rating、",
+      "加别名、查别名、开关成绩查询、看运行状态，说明白了我就能办。",
+      "例如「@我 帮我给 id870 加个别名叫八爪鱼」「@我 以后别人问我成绩就给他们看」。",
       "想查群里别人的成绩就 @上他，例如「@我 帮我查一下 @某人 的闪击牌子」——只有本人开过 #允许查询 才查得到。",
     ].join("\n");
   }
@@ -521,10 +597,6 @@ function createQqBot(config, deps = {}) {
   async function handleHelp(event) { return runCapability(event, "help", ""); }
   async function handleChart(event) { return runCapability(event, "chart", ""); }
 
-  function isAdmin(event) {
-    return event.message_type === "private" || ["owner", "admin"].includes(String(event.sender?.role || ""));
-  }
-
   async function sendLines(event, header, lines, footer = "") {
     const chunks = core.splitLines(header, lines, footer, 1500);
     for (const chunk of chunks) await sayOrigin(event, chunk);
@@ -538,7 +610,9 @@ function createQqBot(config, deps = {}) {
   async function handleCalculate(event, input) { return runCapability(event, "calculate", input); }
 
   async function handleAlias(event, name, input) {
-    if (name === "aliasdelete" && !isAdmin(event)) return sayOrigin(event, "只有群主或群管理员可以删除别名。");
+    if (name === "aliasdelete" && !aliasDeleteQqs.has(String(event.user_id))) {
+      return sayOrigin(event, "删除别名只对指定账号开放，你这边我不能给删。");
+    }
     if (name === "whatis") {
       const needle = core.normalizeSongQuery(input);
       const matches = needle ? core.INTERNAL_SONGS.filter(song => core.getAliasStore().matches(song.id, needle)) : [];
@@ -568,9 +642,11 @@ function createQqBot(config, deps = {}) {
     return sayOrigin(event, (result.added ? "已添加别名：" : "这首歌已有该别名：") + alias + " → " + core.songMatchLines([song])[0] + (shared.length ? "\n这个别名还对应 " + shared.length + " 首歌。" : ""));
   }
 
-  async function handleStatus(event) {
+  // 状态文本两处都用：#状态 命令，以及闲聊里模型挑的 status 能力 ——
+  // 后者读不到 NapCat 连接状态，所以要由宿主注册进来（core 的 setStatusProvider）。
+  function statusText() {
     const minutes = Math.max(0, Math.floor((now() - startedAt) / 60000));
-    const text = [
+    return [
       "Takase Bot QQ 版运行正常",
       "NapCat：" + (onebot.healthy() ? "已连接" : "未连接"),
       "登录账号：" + (onebot.state.selfId || "未知"),
@@ -578,8 +654,11 @@ function createQqBot(config, deps = {}) {
       "等待队列：" + queue.length + " 项",
       "已运行：" + minutes + " 分钟",
     ].join("\n");
-    if (event.message_type === "group") await sayGroup(event.group_id, text, event.user_id);
-    else await sayPrivate(event.user_id, text);
+  }
+
+  async function handleStatus(event) {
+    if (event.message_type === "group") await sayGroup(event.group_id, statusText(), event.user_id);
+    else await sayPrivate(event.user_id, statusText());
   }
 
   async function handleUnbind(event) {
@@ -596,7 +675,9 @@ function createQqBot(config, deps = {}) {
       return sayPrivateOrGroup(event, "账号已经删掉了。以后想用，再发一句 #绑定 就行。");
     }
     sessions.set(String(event.user_id), { state: "confirmUnbind", email: "", attempts: 0, startedAt: now(), groupId: null });
-    return sayPrivateOrGroup(event, "确定删除吗？本机保存的账号绑定删了就找不回来了。\n60 秒内再发一次 #解绑 确认。");
+    // 窗口就是会话的 TTL，从常量推出来，别写死 —— 原来写的「60 秒」和实际的 5 分钟对不上
+    return sayPrivateOrGroup(event, "确定删除吗？本机保存的账号绑定删了就找不回来了。\n" +
+      Math.round(SESSION_TTL_MS / 60000) + " 分钟内再发一次 #解绑 确认。");
   }
 
   // 开/关「别人能不能查我的成绩」。默认关着 —— 账号密码是人家自己交上来的，
@@ -618,6 +699,18 @@ function createQqBot(config, deps = {}) {
     return sayPrivate(event.user_id, "当前没有进行中的操作。");
   }
 
+  // 群里先说一声、再把步骤私聊过去。闲聊路径也走这里 —— 但只走到这里为止：
+  // 邮箱密码由 continueBind 的多轮私聊流程收集，模型碰不到，也传不了。
+  async function handleBind(event) {
+    if (event.message_type === "group") {
+      await sayGroup(event.group_id, "绑定得私聊来，步骤我已经私聊发你了。没收到的话，先加我好友试试。", event.user_id);
+      try { await startBind(event); }
+      catch { /* 非好友会失败，上面的群消息已经说明了 */ }
+      return;
+    }
+    return startBind(event);
+  }
+
   async function handleEvent(event) {
     if (!event || event.post_type !== "message") return;
 
@@ -628,11 +721,19 @@ function createQqBot(config, deps = {}) {
     }
     // 先记进群上下文。@ 我的那条也记，但聊天取上下文时会跳过它 ——
     // 否则模型会看到同一句话出现两次。放最前面是为了让「机器人的回复」排在提问之后。
-    if (isGroup) rememberGroupMessage(event.group_id, senderName(event), summarizeSegments(event.message, config.qqNumber));
+    if (isGroup) rememberGroupMessage(event.group_id, senderName(event), summarizeSegments(event.message, config.qqNumber), event.message_id);
     // 群里必须带前缀；私聊里裸文本先交给绑定会话
     let command = parseCommand(textOnly(event));
     const session = getSession(event.user_id);
 
+    // 解绑确认期间收到私聊文本，绝不能落进绑定流程 —— 那边会在末尾回一句
+    // 「正在验证，请稍候……」，用户明明是来确认解绑的，只会一头雾水。
+    // 裸关键字「解绑」本身也算确认：用户刚被告知「再发一次」，不一定记得带 #。
+    if (!command && session?.state === "confirmUnbind" && event.message_type === "private") {
+      const bare = String(event.raw_message || "").normalize("NFKC").trim().toLowerCase();
+      if (LOOKUP.get(bare) === "unbind") return handleUnbind(event);
+      return sayPrivate(event.user_id, "现在在等你确认解绑：要继续就再发一次 #解绑，不想解了就发 #取消。");
+    }
     if (!command && session && event.message_type === "private") {
       await continueBind(event, String(event.raw_message || event.message || ""));
       return;
@@ -651,6 +752,7 @@ function createQqBot(config, deps = {}) {
           id: String(event.message_id), guildId: "qq", channelId: String(event.group_id),
           author: { id: String(event.user_id), bot: false }, content: text, __qqEvent: event,
           __context: groupContextText(event.group_id, 1),   // 跳过本条，只给「之前」的上下文
+          __quoted: await quotedContext(event),             // 本条引用的那条，可能远在 12 条之外
           __mentionQqs: mentions,                            // runAction 用它校验 target
           __mentionHint: await mentionHint(event, mentions),
         });
@@ -669,14 +771,7 @@ function createQqBot(config, deps = {}) {
     log("收到指令 #" + ALIASES[command.name][0] + "（" + event.message_type + " user=" + event.user_id + "）");
     switch (command.name) {
       case "help": return handleHelp(event);
-      case "bind":
-        if (event.message_type === "group") {
-          await sayGroup(event.group_id, "绑定得私聊来，步骤我已经私聊发你了。没收到的话，先加我好友试试。", event.user_id);
-          try { await startBind(event); }
-          catch { /* 非好友会失败，上面的群消息已经说明了 */ }
-          return;
-        }
-        return startBind(event);
+      case "bind": return handleBind(event);
       case "chart": return handleChart(event);
       case "plate": return handlePlate(event, command.rest);
       case "song": return handleSong(event, command.rest);
@@ -734,7 +829,24 @@ function createQqBot(config, deps = {}) {
       levelUsage: "用法：#等级 <14/14+/14.1/ABFB> [1-99页码]",
       constantUsage: "请输入 0–20 的整数或一位小数，例如：#定数表 14.2",
       calculateUsage: "用法：#计算 <定数> <技术分> <none/fb> <none/fc/ab/ab-plus>\n例如：#计算 14.2 1000737 fb none",
+      // 闲聊也能触发的几条，文案里的命令要写成 QQ 的说法（默认值是 Discord 的斜杠）
+      aliasUsage: "请把曲目和别名用竖线分开，例如：id870 | 八爪鱼。曲目可以是曲名、已有别名或 Song ID。",
+      bindUsage: "绑定得私聊来 —— 私聊发我一句 #绑定，我带你填账号。别把邮箱密码发在群里。",
+      allowDone: [
+        "好，开了。以后有人 @ 我查你的成绩，我就帮他们翻。想关掉随时说一声。",
+        "行，开了。以后群里问起你的成绩我就不藏着掖着了，不想给看了再叫一声。",
+      ],
+      denyDone: [
+        "收到，关了。以后别人想查你的成绩，我一律回绝。",
+        "好，关了。往后谁问你的成绩我都不说，放心。",
+      ],
+      statusUnavailable: "我现在没法自查状态，这条功能暂时没开。",
     });
+    // 状态能力靠它取文本：core 读不到 NapCat 的连接状态和队列
+    core.setStatusProvider(statusText);
+    if (!aliasDeleteQqs.size) {
+      log("提示：qq-config.json 里没配 aliasDeleteQqs，删除别名现在对谁都不可用（#删除别名 一律回绝）");
+    }
     sweepOutbox();
 
     try {
@@ -745,7 +857,9 @@ function createQqBot(config, deps = {}) {
           log,
           ...(deps.chat || {}),
           adapter: {
-            ability: (message) => "运行时实际能力：你正在 QQ 群中回复直接 @ 你的消息。可以按语境发送梨绪表情。用户想查成绩、查定数、算 Rating 时可以调用工具，结果和图片由程序发送。" + (message.__mentionHint || ""),
+            ability: (message) => "运行时实际能力：你正在 QQ 群中回复直接 @ 你的消息。可以按语境发送梨绪表情。用户想查成绩、查定数、算 Rating、加歌曲别名、查别名、开关成绩查询、问机器人状态、想绑定账号时可以调用工具，结果和图片由程序发送。" +
+              "绑定工具只把用户引到私聊流程，你自己绝不能索要、接收或转述邮箱和密码。" +
+              "删除别名你没有这个工具，用户要删就告诉他用 #删除别名 指令，而且只有指定账号能用。" + (message.__mentionHint || ""),
             actions: core.CAPABILITY_SPECS,
             actionTarget: true,
             personalRecommendationNotice: message => require('../rio-chat/personal-recommendation.cjs').bindingNotice(
@@ -756,16 +870,27 @@ function createQqBot(config, deps = {}) {
             typing: async () => {},
             send: async (message, text, file) => {
               const event = message.__qqEvent;
-              if (event?.message_type === "group") rememberGroupMessage(event.group_id, "梨绪", text + (file ? "（表情）" : ""));
-              return file ? sendLocalImage(event, file.absoluteFile, text) : sayOrigin(event, text);
+              const sent = await (file ? sendLocalImage(event, file.absoluteFile, text) : sayOrigin(event, text));
+              // 自己说过的话也留一份：用户引用的常常正是 bot 上一条回复
+              if (event?.message_type === "group") rememberGroupMessage(event.group_id, "梨绪", text + (file ? "（表情）" : ""), sent?.message_id);
+              return sent;
             },
             // 群里最近的消息，帮模型接上「这个人」「刚才那张图」这类指代
             context: (message) => Array.isArray(message.__context) ? message.__context : [],
+            // 本条引用（QQ 的「回复」）指向的那条消息，可能早就不在上下文窗口里了
+            quoted: (message) => message.__quoted || "",
             // 聊天里的工具调用：和 #命令 走同一条解析链路，只是把模型那句话
             // 当作引出语先发出去。失败（未绑定、冷却、找不到曲子）时不带引出语。
             runAction: async (action, message, result) => {
               const event = message.__qqEvent;
               if (!event) return { handled: false };
+              // 绑定不走 resolveCapability，也不把模型那句引出语带上 —— 那是一条要收
+              // 邮箱密码的多轮私聊流程，让它经模型的手，明文密码就会作为 action 参数
+              // 进到 DeepSeek 的请求体和本地会话历史里。这里只把用户引到原流程上。
+              if (action.name === "bind") {
+                await handleBind(event);
+                return { handled: true };
+              }
               // 只认本条消息真的 @ 过的人：模型给别的编号一律作废，退回查自己
               const mentioned = new Set(message.__mentionQqs || []);
               const target = action.target && mentioned.has(String(action.target)) ? String(action.target) : null;

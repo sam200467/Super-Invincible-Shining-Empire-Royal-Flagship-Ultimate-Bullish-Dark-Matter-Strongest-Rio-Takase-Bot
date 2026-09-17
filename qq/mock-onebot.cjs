@@ -51,9 +51,14 @@ function createMockNapCat(options = {}) {
     close: () => { try { socket?.close(); } catch {} },
     // 造一条群消息事件，message 是 array 格式（与实测一致）。
     // at 传机器人 QQ 号 → 正文前加一个 @机器人 段；ats 传别人的 QQ 号 → 依次加 @某人 段。
+    // replyTo 传一条消息 id → 加一个 reply 段（用户长按引用），排在最前面。
     // raw_message 也照实测写成 CQ 码。
-    groupMessage({ userId = 10002, groupId = 123456789, text = "#帮助", messageId = Date.now(), role = "member", nickname = "测试", at = null, ats = [] } = {}) {
+    groupMessage({ userId = 10002, groupId = 123456789, text = "#帮助", messageId = Date.now(), role = "member", nickname = "测试", at = null, ats = [], replyTo = null } = {}) {
       const segments = [], raw = [];
+      if (replyTo) {
+        segments.push({ type: "reply", data: { id: String(replyTo) } });
+        raw.push("[CQ:reply,id=" + replyTo + "]");
+      }
       for (const qq of [at, ...ats]) {
         if (!qq) continue;
         segments.push({ type: "at", data: { qq: String(qq) } });

@@ -650,6 +650,23 @@ const CAPABILITY_SPECS = Object.freeze([
   { name: "constant", label: "定数表", argHint: "0–20 的整数或一位小数，如 14 或 14.2", needsBinding: false },
   { name: "level", label: "等级成绩长图", argHint: "14、14+、14.1 或 ABFB，可再加页码", needsBinding: true },
   { name: "calculate", label: "单曲 Rating 计算", argHint: "定数、技术分、铃铛 none/fb、连击 none/fc/ab/ab-plus", needsBinding: false },
+  // 别名库：社区词汇，读的谁都能读，添加也照命令路径的既有策略对所有人开放。
+  // 「添加」要两个参数，按命令路径已有的竖线约定切开。
+  // **删除刻意不在这里** —— 它只认白名单里的那一个账号，而且只走命令格式，
+  // 所以留在各入口的命令路径上（QQ 侧见 aliasDeleteQqs），模型永远碰不到它。
+  { name: "aliases", label: "查看某首歌的全部别名", argHint: "曲名、已有别名或 Song ID", needsBinding: false },
+  { name: "whatis", label: "按别名反查是哪些歌", argHint: "别名，只给一部分也能查", needsBinding: false },
+  { name: "aliasadd", label: "给歌曲添加别名", argHint: "曲目和别名用竖线分开，例如 id870 | 八爪鱼", needsBinding: false },
+  // allow / deny 是隐私开关，故意不写 needsBinding：那句话会带上「查别人」的语义，
+  // 而开关永远只改调用者自己，分支里单独取自己的绑定。
+  { name: "allow", label: "开放自己的成绩给群友查", argHint: "不需要参数", needsBinding: false },
+  { name: "deny", label: "关掉群友查自己成绩的权限", argHint: "不需要参数", needsBinding: false },
+  // argHint 里那段约束是防寒暄误触发的：没有它，模型会把「在吗」当成问状态，
+  // 回一串运维数据，比人设答一句「好得很」体验差得多。
+  { name: "status", label: "机器人当前的运行状态",
+    argHint: "不需要参数。只在用户明确问机器人在不在线、是不是掉线了、队列里排了多少、运行了多久时才调用；用户只是打招呼、「在吗」、闲聊寒暄时绝对不要调用",
+    needsBinding: false },
+  { name: "bind", label: "绑定大饼账号的引导", argHint: "不需要参数", needsBinding: false },
 ]);
 
 // 少数几处必须写命令的地方，各平台叫法不同（Discord 是 /bind，QQ 是 #绑定）。
@@ -677,6 +694,20 @@ let capabilityHints = Object.freeze({
   levelUsage: "请输入显示等级（如 14、14+）、一位小数定数（如 14.1）或 ABFB。",
   constantUsage: "请输入 0–20 的整数或一位小数，例如 14、14.2。",
   calculateUsage: "请给出定数、技术分、铃铛（none 或 fb）和连击（none / fc / ab / ab-plus），例如 14.2 1000737 fb none。",
+  // 以下按 Discord 写默认值，QQ 入口在 start() 里覆盖成 # 命令的说法。
+  // 新工具漏配 hint 不会在启动时报错（configureCapabilities 只校验已存在的键），
+  // 只会在运行期返回空串 —— 两边入口都必须覆盖。
+  aliasUsage: "请把曲目和别名用竖线分开，例如 `id870 | 八爪鱼`；曲目可以是曲名、已有别名或 Song ID。",
+  bindUsage: "绑定得单独走一遍流程：执行 `/bind`，我带你填账号。别把邮箱密码发在频道里。",
+  allowDone: [
+    "好，开了。以后有人 @ 我查你的成绩，我就帮他们翻。想关掉随时说一声。",
+    "行，开了。以后群里问起你的成绩我就不藏着掖着了，不想给看了再叫一声。",
+  ],
+  denyDone: [
+    "收到，关了。以后别人想查你的成绩，我一律回绝。",
+    "好，关了。往后谁问你的成绩我都不说，放心。",
+  ],
+  statusUnavailable: "我现在没法自查状态，这条功能暂时没开。",
 });
 
 function isValidHint(value) {
@@ -702,6 +733,16 @@ function configureCapabilities(options = {}) {
     if (!isValidHint(merged[key])) throw new Error("能力提示文案不能为空：" + key);
   }
   capabilityHints = Object.freeze(merged);
+}
+
+// 状态文本要读各平台自己的东西（QQ 是 NapCat 连接和队列，Discord 是 client），
+// core 拿不到，所以由宿主注册一个取文本的函数。没注册就当作这条能力没开放，
+// 不影响其余能力。文案不在这里拼，免得两个平台各写一套措辞。
+let statusProvider = null;
+function setStatusProvider(fn) {
+  if (fn !== null && typeof fn !== "function") throw new Error("状态提供者必须是函数");
+  statusProvider = fn;
+  return statusProvider;
 }
 
 // 宿主的集成测试会替换 core.getBinding / core.generateChart 这类函数（真实账号
@@ -834,6 +875,66 @@ async function resolveCapability(config, userId, name, query, onLine = () => {},
     }
   }
 
+  // ── 别名库 ────────────────────────────────────────────────────────
+  // 命令路径（#添加别名 / /aliasadd）各有自己的实现，这里只服务闲聊路径：
+  // 模型给的是一个字符串，「添加」要的两个参数按命令路径已有的竖线约定切开。
+  // 删除不在这条链路上，见 CAPABILITY_SPECS 上的说明。
+  if (spec.name === "aliases" || spec.name === "whatis") {
+    const store = coreCall("getAliasStore");
+    if (spec.name === "whatis") {
+      const needle = normalizeSongQuery(q);
+      const matches = needle ? INTERNAL_SONGS.filter((song) => store.matches(song.id, needle)) : [];
+      return { kind: "lines", header: matches.length ? "匹配到以下别名对应的曲目：" : "没有找到这个别名。", lines: songMatchLines(matches), footer: "" };
+    }
+    const matches = searchSongs(q);
+    if (matches.length !== 1) {
+      return { kind: "lines", header: matches.length ? "找到多首曲目，请用完整 Song ID 明确选择：" : "没有找到曲目。", lines: songMatchLines(matches), footer: "" };
+    }
+    const song = matches[0];
+    const list = store.list(song.id);
+    return {
+      kind: "lines",
+      header: songMatchLines([song])[0] + " 的全部别名（" + list.length + " 个）：",
+      lines: list.length ? list.map((alias) => "• " + alias) : ["暂未添加别名。"],
+      footer: "",
+    };
+  }
+
+  if (spec.name === "aliasadd") {
+    const divider = q.indexOf("|");
+    if (divider < 0) return text(capabilityHints.aliasUsage);
+    const matches = searchSongs(q.slice(0, divider).trim());
+    if (matches.length !== 1) {
+      return { kind: "lines", header: matches.length ? "找到多首曲目，请用完整 Song ID 明确选择：" : "没有找到曲目。", lines: songMatchLines(matches), footer: "" };
+    }
+    const song = matches[0];
+    const store = coreCall("getAliasStore");
+    let alias;
+    try { alias = store.validateAlias(q.slice(divider + 1).trim()); }
+    catch (error) { return text(safeError(error)); }
+    const result = store.add(Number(song.id), alias, userId);
+    const shared = INTERNAL_SONGS.filter((other) => other.id !== song.id && store.matches(other.id, normalizeSongQuery(alias), true));
+    return text((result.added ? "已添加别名：" : "这首歌已有该别名：") + alias + " → " + songMatchLines([song])[0] +
+      (shared.length ? "\n这个别名还对应 " + shared.length + " 首歌。" : ""));
+  }
+
+  // 隐私开关只改调用者自己。这里**不能**用上面那句 targetUserId 的绑定 ——
+  // 那取的是「被 @ 的人」的绑定，拿它来写就变成替别人开关了。
+  if (spec.name === "allow" || spec.name === "deny") {
+    const mine = await coreCall("getBinding", config, userId);
+    if (!mine) return { kind: "notice", text: pickHint(capabilityHints.bindNotice) };
+    await coreCall("saveBinding", config, { ...mine, allowOthers: spec.name === "allow" });
+    return text(pickHint(spec.name === "allow" ? capabilityHints.allowDone : capabilityHints.denyDone));
+  }
+
+  if (spec.name === "status") {
+    const provided = statusProvider ? String(statusProvider() || "").trim() : "";
+    return provided ? text(provided) : { kind: "notice", text: pickHint(capabilityHints.statusUnavailable) };
+  }
+
+  // 绑定只是把用户引到原来的流程上去，模型经不了手，也传不了任何凭据。
+  if (spec.name === "bind") return { kind: "notice", text: pickHint(capabilityHints.bindUsage) };
+
   return { kind: "notice", text: "这个功能暂时没有开放。" };
 }
 
@@ -873,6 +974,7 @@ module.exports = {
   CAPABILITY_SPECS,
   configureCapabilities,
   capabilityHint,
+  setStatusProvider,
   resolveCapability,
   // 定数
   calculateBaseRating,

@@ -354,7 +354,8 @@ function helpText() {
     "",
     "别名命令：/aliasadd 添加别名（所有成员）；/aliasdelete 删除别名（仅管理员）；/aliases 查看某首歌全部别名；/whatis 按别名反查。查询无需绑定。",
     "`/allowquery`　允许群友查询你的成绩；`/denyquery`　关掉（默认关着）。两条只对你自己可见。",
-    "直接 `@我` 用大白话提问也行，例如「帮我查一下 id870 的全难度成绩」「14.2 打 1000737 能有多少 rating」。",
+    "直接 `@我` 用大白话提问也行，不用背上面的格式 —— 查分、查定数、算 Rating、加别名、查别名、开关成绩查询、看运行状态，说明白了我就能办。",
+    "例如「帮我查一下 id870 的全难度成绩」「14.2 打 1000737 能有多少 rating」「帮我把 id870 的别名设成八爪鱼」「以后别人问我成绩就给他们看」。",
     "首次使用请先执行 `/bind`。账号表单和结果只对你可见；请勿把邮箱、密码或 Bot Token 发到频道。",
   ].join("\n");
 }
@@ -392,7 +393,7 @@ function assertAllowedInteraction(interaction, config) {
 async function selftest() {
   if (COMMANDS.length !== 17) throw new Error("指令数量自测失败");
   const capabilityNames = CAPABILITY_SPECS.map((spec) => spec.name).join(",");
-  if (capabilityNames !== "help,chart,plate,song,chartinfo,constant,level,calculate") {
+  if (capabilityNames !== "help,chart,plate,song,chartinfo,constant,level,calculate,aliases,whatis,aliasadd,allow,deny,status,bind") {
     throw new Error("能力清单自测失败：" + capabilityNames);
   }
   configureCapabilities({ helpText: helpText() });
@@ -622,7 +623,9 @@ async function main() {
           context: (message) => Array.isArray(message.__context) ? message.__context : [],
           ability: (message) => {
             const users = discordMentions(message);
-            const base = "运行时实际能力：你正在Discord中回复@消息。现在已经支持表情附件，由程序决定发送。用户想查成绩、查定数、算 Rating 时可以调用工具，结果和图片由程序发送。";
+            const base = "运行时实际能力：你正在Discord中回复@消息。现在已经支持表情附件，由程序决定发送。用户想查成绩、查定数、算 Rating、加歌曲别名、查别名、开关成绩查询、问机器人状态、想绑定账号时可以调用工具，结果和图片由程序发送。" +
+              "绑定工具只把用户引到 /bind 的表单上，你自己绝不能索要、接收或转述邮箱和密码。" +
+              "删除别名你没有这个工具，用户要删就用 /aliasdelete（仅服务器管理员）。";
             if (!users.length) return base;
             return base + "\n本条消息 @ 了：" + users.map((user) => user.username + "（编号 " + user.id + "）").join("、") +
               "。要查的是别人时，在 action 里加 \"target\":\"对方的编号\"；查自己、或没提到别人时不要加 target。";
@@ -654,6 +657,14 @@ async function main() {
   let currentOperation = "空闲";
   let shuttingDown = false;
   const startedAt = Date.now();
+
+  // 状态文本两处都用：/status 命令，以及闲聊里模型挑的 status 能力。
+  // 后者要由宿主注册给 core —— Discord 的运行状态它自己读不到。
+  function statusText() {
+    const minutes = Math.max(0, Math.floor((Date.now() - startedAt) / 60000));
+    return "Takase Bot 运行正常\n当前：" + currentOperation + "\n等待队列：" + operationQueue.length + " 项\n已运行：" + minutes + " 分钟";
+  }
+  core.setStatusProvider(statusText);
 
   // ── 频道上下文 ────────────────────────────────────────────────────
   // 和 QQ 版同一个思路：@ 机器人之前频道里发生过什么，一起交给模型，

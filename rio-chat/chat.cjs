@@ -385,9 +385,14 @@ function createChat(settings, host, deps={}) {
       const ability=typeof adapter.ability==="function"?adapter.ability(message):adapter.ability;
       // 群上下文由宿主提供（QQ 侧是群里最近几条消息），没有就不插这段
       const context=typeof adapter.context==="function"?(adapter.context(message)||[]).filter(Boolean).map(String):[];
+      // 本条消息引用（QQ 的「回复」）的那条：可能远在群上下文窗口之外，而且是用户
+      // 真正在问的东西。挨着用户那句话放，别塞进上面那段背景里。
+      const quoted=typeof adapter.quoted==="function"?String(adapter.quoted(message)||"").trim():"";
       const messages=[...(context.length?[{role:"system",content:"【群里最近的消息，用来帮你理解上下文：用户说的「这个人」「刚才那张图」「上面那个」多半指这里。不要逐条回应，也不要主动复述这些内容。】\n"+context.join("\n")}]:[]),
         ...(uncomfortable?[{role:"system",content:"用户觉得刚才的话有点过分或不舒服。只处理当前情绪：简短真诚道歉，然后自然地卖萌安慰一下。不要宣布进入严肃模式，不要承诺永久改变人格；下一轮恢复正常梨绪性格。"}]:[]),
-        ...history,{role:"user",content:text}];
+        ...history,
+        ...(quoted?[{role:"system",content:"【本条消息引用（回复）了下面这条消息 —— 用户问的多半就是它，别当成没发生过；可以照着它的内容回答，但不要整段复述。】\n"+quoted}]:[]),
+        {role:"user",content:text}];
       // webFetchImpl 也要透传：不然宿主注入的假 fetch 只挡得住模型调用，检索仍会真联网。
       const result=await requestReply(settings,messages,{fetchImpl:deps.fetchImpl,webFetchImpl:deps.webFetchImpl,dispatcher,signal:controller.signal,ability:ability,actions:actionSpecs,actionTarget:Boolean(adapter.actionTarget),personalRecommendationNotice:typeof adapter.personalRecommendationNotice==='function'?()=>adapter.personalRecommendationNotice(message):undefined,
         // 检索提示走宿主现成的发送路径，前端不用为了这条消息再改一遍。

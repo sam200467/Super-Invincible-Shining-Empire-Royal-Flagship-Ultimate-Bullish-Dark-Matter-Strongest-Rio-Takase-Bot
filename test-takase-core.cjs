@@ -1,6 +1,9 @@
 "use strict";
 // takase-core.cjs 的冒烟测试：确认抽取后各函数行为与抽取前一致。
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const core = require("./takase-core.cjs");
 
 // 定数计算：与入口 selftest 里同样的样例
@@ -166,6 +169,69 @@ assert.match(core.safeError(new Error("联系 someone@example.com")), /邮箱已
   assert.equal((await core.resolveCapability({}, "free", "help", "")).text, "自定义清单");
   assert.throws(() => core.configureCapabilities({ helpText: " " }), /不能为空/);
   core.configureCapabilities({ helpText: core.CAPABILITY_SPECS.length + " 项功能" });
+
+  // ── 别名 / 状态 / 隐私开关（闲聊路径新增的几条）────────────────────
+  // 这几样以前只有 #命令 走得到。现在闲聊也要能解析，所以用**真实的存储**跑 ——
+  // 免得出现「模型跟用户说加好了、其实一个字没写进去」这种从回复上完全看不出的错。
+  const { SongAliasStore } = require("./song-alias-store.cjs");
+  const aliasDir = fs.mkdtempSync(path.join(os.tmpdir(), "takase-alias-"));
+  core.setAliasStore(new SongAliasStore(path.join(aliasDir, "aliases.json"), core.normalizeSongQuery));
+  const run = (name, query) => core.resolveCapability({}, "free", name, query, () => {}, null);
+
+  // 两个参数靠竖线分开；模型漏了分隔符要给用法，不能自己瞎猜哪半是曲名
+  assert.match((await run("aliasadd", "八爪鱼")).text, /竖线/);
+  assert.match((await run("aliasadd", "id870 | 八爪鱼")).text, /^已添加别名：八爪鱼 → id870/);
+  assert.equal(core.getAliasStore().list(870).includes("八爪鱼"), true, "别名要真的落进存储");
+  // 重复添加不算错，但不能谎报「已添加」
+  assert.match((await run("aliasadd", "id870 | 八爪鱼")).text, /^这首歌已有该别名/);
+  // 存储层的校验错误要透出来，不能吞掉
+  assert.match((await run("aliasadd", "id870 | 870")).text, /纯数字/);
+
+  assert.match((await run("aliases", "id870")).lines.join("\n"), /八爪鱼/);
+  assert.match((await run("whatis", "八爪鱼")).lines.join("\n"), /id870/);
+  assert.match((await run("whatis", "查无此别名")).header, /没有找到/);
+  assert.match((await run("aliases", "zzz查无此曲")).header, /没有找到/);
+
+  // 删除别名**不是**闲聊能力：它只认白名单里的那一个账号，而且只走 #删除别名 命令。
+  // 模型连这个工具名都看不到，所以任何人都不可能用 @消息 删掉别名。
+  assert.equal(core.CAPABILITY_SPECS.some((spec) => spec.name === "aliasdelete"), false,
+    "aliasdelete 一旦进清单，闲聊就等于开了一个绕开白名单的删别名入口");
+  assert.equal((await run("aliasdelete", "id870 | 八爪鱼")).kind, "notice");
+  assert.deepEqual(core.getAliasStore().list(870), ["八爪鱼"], "被拒的删除不能动存储");
+
+  // status 的 argHint 里那句「寒暄时不要调用」是护栏：删掉它，模型会把「在吗」
+  // 当成问运行状态，回一串运维数据，比人设答一句「好得很」差得多。
+  assert.match(core.CAPABILITY_SPECS.find((spec) => spec.name === "status").argHint, /寒暄/);
+
+  // 状态：宿主没注册提供者时当作没开放，注册后原样返回宿主那段文本
+  core.setStatusProvider(null);
+  assert.equal((await run("status", "")).kind, "notice");
+  core.setStatusProvider(() => "NapCat：已连接");
+  assert.equal((await run("status", "")).text, "NapCat：已连接");
+  assert.throws(() => core.setStatusProvider("不是函数"), /必须是函数/);
+  core.setStatusProvider(null);
+
+  // 绑定：只回引导，绝不返回任何要用户填凭据的形状
+  const bind = await run("bind", "");
+  assert.equal(bind.kind, "notice");
+  assert.match(bind.text, /bind/i);
+
+  // 隐私开关只改调用者自己 —— 即使模型给了 target 也不能替别人开
+  const savedGetBinding = core.getBinding;
+  const realSaveBinding = core.saveBinding;
+  const saved = [];
+  core.getBinding = async (_config, userId) => ({ playerName: ["me", "free"].includes(String(userId)) ? "我" : "别人", allowOthers: false });
+  core.saveBinding = async (_config, binding) => { saved.push(binding); };
+  assert.match((await run("allow", "")).text, /开了/);
+  assert.equal(saved.at(-1).allowOthers, true);
+  assert.equal(saved.at(-1).playerName, "我");
+  // 带 target 的调用（「帮我给小明开了」）也只能落到自己头上
+  await core.resolveCapability({}, "me", "allow", "", () => {}, "someone-else");
+  assert.equal(saved.at(-1).playerName, "我", "隐私开关不能被 target 带去改别人");
+  assert.match((await run("deny", "")).text, /关了/);
+  assert.equal(saved.at(-1).allowOthers, false);
+  core.getBinding = savedGetBinding;
+  core.saveBinding = realSaveBinding;
 
   console.log("CORE_SMOKE_OK 导出项 " + Object.keys(core).length + " 个");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

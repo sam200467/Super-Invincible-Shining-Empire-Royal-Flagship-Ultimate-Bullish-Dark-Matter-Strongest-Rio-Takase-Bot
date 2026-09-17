@@ -134,6 +134,14 @@ test("第二个并发连接被拒绝（防止消息被处理两次）", async (t
   assert.ok(logs.some((l) => l.includes("第二个并发连接")), "应警告重复连接");
 });
 
+test("读取类动作不受发送间隔限制（否则每次引用都白等一秒多）", async (t) => {
+  const { bot } = await setup(t, { minSendIntervalMs: 3000, jitterMs: 0 });
+  await bot.call("send_group_msg", { group_id: 3, message: [{ type: "text", data: { text: "先发一条" } }] });
+  const startedAt = Date.now();
+  await bot.call("get_msg", { message_id: 1 });
+  assert.ok(Date.now() - startedAt < 1000, "get_msg 不该陪着等发送间隔");
+});
+
 test("message_id 重复的事件只投递一次", async (t) => {
   const { bot, mock, events } = await setup(t);
   mock.groupMessage({ messageId: 555, text: "第一次" });

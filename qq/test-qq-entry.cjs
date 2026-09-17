@@ -66,12 +66,14 @@ const deepSeekReply = (body) => {
 };
 const deepSeekStub = (body) => async () => deepSeekReply(body);
 
-async function setup(t, { bindings = {}, rioChat = false, fetchImpl = null } = {}) {
+async function setup(t, { bindings = {}, rioChat = false, fetchImpl = null, aliasDeleteQqs = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "takase-qq-"));
   fs.writeFileSync(path.join(dir, "fake-core.exe"), "");
   fs.writeFileSync(path.join(dir, "fake-vault.exe"), "");
   const config = makeConfig(dir);
   if (rioChat) config.rioChatDir = writeRioChatFixture(dir);
+  // 缺省不配：删除别名因此对所有账号关闭，正好用来测「没配就是谁都不能删」
+  if (aliasDeleteQqs) config.aliasDeleteQqs = aliasDeleteQqs;
 
   // 捕获 stdout 用来断言「密码从不外泄」
   const printed = [];
@@ -316,6 +318,30 @@ test("#解绑 需要二次确认", async (t) => {
   assert.equal(store[USER], undefined, "第二次确认后应删除");
 });
 
+test("解绑确认期间发别的私聊文本：不落进绑定流程", async (t) => {
+  const { mock, store, sentText } = await setup(t, { bindings: { [USER]: { userId: USER, email: "a@b.c", password: "x", playerName: "P" } } });
+  mock.privateMessage({ text: "#解绑", messageId: 971 });
+  await settle();
+  // 文案里的窗口必须和会话 TTL 一致：原来写死「60 秒」，实际是 5 分钟
+  assert.match(sentText("send_private_msg"), /5 分钟内再发一次 #解绑/);
+
+  // 原来这里会回一句「正在验证，请稍候……」—— 那是绑定流程的兜底，驴唇不对马嘴
+  mock.privateMessage({ text: "那个……", messageId: 972 });
+  await settle();
+  assert.match(sentText("send_private_msg"), /等你确认解绑/);
+  assert.equal(sentText("send_private_msg").includes("正在验证"), false);
+  assert.ok(store[USER], "没确认之前不该真删");
+});
+
+test("解绑确认期间发裸关键字「解绑」也算确认", async (t) => {
+  const { mock, store } = await setup(t, { bindings: { [USER]: { userId: USER, email: "a@b.c", password: "x", playerName: "P" } } });
+  mock.privateMessage({ text: "#解绑", messageId: 981 });
+  await settle();
+  mock.privateMessage({ text: "解绑", messageId: 982 });   // 不带 # 前缀
+  await settle(120);
+  assert.equal(store[USER], undefined, "裸关键字也该算确认");
+});
+
 test("#状态 报告连接与队列", async (t) => {
   const { mock, sentText } = await setup(t);
   mock.privateMessage({ text: "#状态", messageId: 961 });
@@ -496,6 +522,88 @@ test("群上下文：@机器人时带上刚才群里发生的事", async (t) => 
   assert.match(sentText("send_group_msg"), /哼哼/);
 });
 
+test("引用旧消息 @机器人：被引用的那条会一起送进提示词", async (t) => {
+  const bodies = [];
+  const { mock } = await setup(t, {
+    bindings: { [USER]: BOUND },
+    rioChat: true,
+    fetchImpl: async (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return chatReply({ text: "那几首是按定数挑的。", emotion: "neutral", scene: "ordinary", expressionIds: [] })();
+    },
+  });
+  // 引用的这条 bot 从没见过（早于本次启动 / 已滑出 12 条窗口），只能问 NapCat 要
+  const QUOTED = "我从曲库里挑了几首：Reach For The Stars（13.9）、DADDY MULK（13.8）";
+  mock.setResponder((frame) => frame.action === "get_msg"
+    ? { status: "ok", retcode: 0, data: {
+        message_id: 7001, group_id: 123456789, time: Math.floor(Date.now() / 1000) - 300,
+        sender: { user_id: 10001, nickname: "Takase Bot", card: "" },
+        message: [{ type: "text", data: { text: QUOTED } }],
+      } }
+    : { status: "ok", retcode: 0, data: { message_id: 1 } });
+
+  // 刻意避开「为什么」：那是检索策略里的「事实问答先核实」，会让这一轮不走模型
+  mock.groupMessage({ text: "你刚才推的这几首是怎么挑的呀", at: 10001, messageId: 7100, replyTo: 7001 });
+  await settle(300);
+
+  const messages = bodies[0].messages;
+  const lastUser = messages.findLastIndex((m) => m.role === "user");   // 末尾还有一条 assistant 预填充
+  const note = messages[lastUser - 1];
+  assert.equal(note.role, "system");
+  assert.equal(messages[lastUser].role, "user");
+  assert.match(note.content, /Reach For The Stars/, "引用的内容要进提示词");
+  assert.match(note.content, /别当成没发生过/, "要说明这是引用对象，不是普通背景");
+  assert.match(note.content, /梨绪（我自己）/, "bot 自己说的话要标明，否则它会不认账");
+  // 引用不该混进「群里最近的消息」那段
+  const background = messages.filter((m) => m.role === "system" && m.content.includes("群里最近的消息"));
+  assert.equal(background.some((m) => m.content.includes("Reach For The Stars")), false, "引用不该混进群上下文那段");
+});
+
+test("引用 bot 自己发过的消息：翻本地留底，不再问 NapCat", async (t) => {
+  const bodies = [];
+  const { mock } = await setup(t, {
+    bindings: { [USER]: BOUND },
+    rioChat: true,
+    fetchImpl: async (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return chatReply({ text: "哼哼，刚才说过了。", emotion: "proud", scene: "ordinary", expressionIds: [] })();
+    },
+  });
+  mock.groupMessage({ text: "推荐几首好听的", at: 10001, messageId: 7200 });
+  await settle(300);
+  // bot 那条回复的 message_id 由 mock 的 responder 给出（1），引用它
+  mock.groupMessage({ text: "你刚才推的这几首是怎么挑的呀", at: 10001, messageId: 7201, replyTo: 1 });
+  await settle(300);
+
+  assert.equal(mock.find("get_msg").length, 0, "本地留底命中就不该再问 NapCat");
+  const messages = bodies[1].messages;
+  const note = messages[messages.findLastIndex((m) => m.role === "user") - 1];
+  assert.equal(note.role, "system");
+  assert.match(note.content, /梨绪（我自己）：哼哼，刚才说过了/);
+});
+
+test("引用读不到时照常回复，只是没有引用内容", async (t) => {
+  const bodies = [];
+  const { mock, sentText } = await setup(t, {
+    bindings: { [USER]: BOUND },
+    rioChat: true,
+    fetchImpl: async (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return chatReply({ text: "唔，我看看。", emotion: "neutral", scene: "ordinary", expressionIds: [] })();
+    },
+  });
+  mock.setResponder((frame) => frame.action === "get_msg"
+    ? { status: "failed", retcode: 1404, data: null }
+    : { status: "ok", retcode: 0, data: { message_id: 1 } });
+
+  mock.groupMessage({ text: "这条到底说的啥", at: 10001, messageId: 7300, replyTo: 9999 });
+  await settle(300);
+
+  assert.match(sentText("send_group_msg"), /我看看/, "读不到引用不能把回复卡住");
+  const systems = bodies[0].messages.filter((m) => m.role === "system").map((m) => m.content).join("\n");
+  assert.equal(systems.includes("本条消息引用"), false);
+});
+
 test("@机器人 闲聊不触发查询", async (t) => {
   const { mock, sentText } = await setup(t, {
     bindings: { [USER]: BOUND },
@@ -507,4 +615,87 @@ test("@机器人 闲聊不触发查询", async (t) => {
 
   assert.match(sentText("send_group_msg"), /超绝最强/);
   assert.equal(mock.find("send_group_msg").some((r) => (r.params.message || []).some((s) => s.type === "image")), false);
+});
+
+// ── 闲聊触发以前只有命令走得到的几条 ─────────────────────────────────
+// 用户的原话是「你能帮我给歌曲添加别名吗」，模型当时只能编一句回绝 ——
+// 因为别名压根不在工具清单里。这几条守着它现在真的能办。
+test("@机器人 用大白话加别名：别名真的落进库里", async (t) => {
+  const { mock, sentText } = await setup(t, {
+    bindings: { [USER]: BOUND },
+    rioChat: true,
+    fetchImpl: chatReply({
+      text: "哼哼，这就给这歌起个新名字——",
+      emotion: "proud", scene: "ordinary", expressionIds: [],
+      action: { name: "aliasadd", query: "id870 | 八比特测试" },
+    }),
+  });
+  mock.groupMessage({ text: "你能帮我给歌曲添加别名吗", at: 10001, messageId: 7101 });
+  await settle(300);
+
+  assert.match(sentText("send_group_msg"), /这就给这歌起个新名字/, "模型那句引出语应该先发出去");
+  assert.match(sentText("send_group_msg"), /已添加别名：八比特测试 → id870/, "回执由程序按真实结果给，不是模型编的");
+  assert.equal(core.getAliasStore().list(870).includes("八比特测试"), true, "别名要真的写进存储");
+});
+
+test("闲聊删别名：连白名单账号也不行，这条压根不接闲聊", async (t) => {
+  const { mock, sentText } = await setup(t, {
+    bindings: { [USER]: BOUND },
+    rioChat: true,
+    // 就算模型硬报一个 aliasdelete 出来，清单里没这个名字，normalizeAction 会整个丢掉
+    fetchImpl: chatReply({
+      text: "这就删——", emotion: "neutral", scene: "ordinary", expressionIds: [],
+      action: { name: "aliasdelete", query: "id870 | 八比特测试" },
+    }),
+    aliasDeleteQqs: [String(USER)],
+  });
+  core.getAliasStore().add(870, "八比特测试", USER);
+  mock.groupMessage({ text: "把 id870 的别名八比特测试删掉", at: 10001, role: "admin", messageId: 7102 });
+  await settle(300);
+
+  assert.equal(core.getAliasStore().list(870).includes("八比特测试"), true, "闲聊路径不允许删别名");
+});
+
+test("#删除别名 没配白名单时谁都不能删", async (t) => {
+  const { mock, sentText } = await setup(t, { bindings: { [USER]: BOUND } });
+  core.getAliasStore().add(870, "八比特测试", USER);
+  mock.privateMessage({ text: "#删除别名 id870 | 八比特测试", messageId: 7110 });
+  await settle(120);
+
+  assert.match(sentText("send_private_msg"), /只对指定账号开放/);
+  assert.equal(core.getAliasStore().list(870).includes("八比特测试"), true, "被拒的删除不能动存储");
+});
+
+test("#删除别名 只认白名单里的账号，群角色不算数", async (t) => {
+  const { mock, sentText } = await setup(t, { bindings: { [USER]: BOUND }, aliasDeleteQqs: ["999999"] });
+  core.getAliasStore().add(870, "八比特测试", USER);
+
+  // USER 在群里是 admin，但白名单里没有他 —— 群主/管理员身份不再管用
+  mock.groupMessage({ text: "#删除别名 id870 | 八比特测试", userId: Number(USER), role: "owner", messageId: 7120 });
+  await settle(120);
+  assert.match(sentText("send_group_msg"), /只对指定账号开放/);
+  assert.equal(core.getAliasStore().list(870).includes("八比特测试"), true, "群主也不能删");
+
+  // 白名单里的号：同样一条指令，删得掉
+  mock.groupMessage({ text: "#删除别名 id870 | 八比特测试", userId: 999999, role: "member", messageId: 7121 });
+  await settle(120);
+  assert.match(sentText("send_group_msg"), /已删除别名：八比特测试/);
+  assert.equal(core.getAliasStore().list(870).includes("八比特测试"), false);
+});
+
+test("@机器人 说想绑定：只引到私聊流程，凭据一步都不过模型", async (t) => {
+  const { mock, sentText } = await setup(t, {
+    rioChat: true,
+    fetchImpl: chatReply({
+      text: "那把邮箱密码发我吧", emotion: "neutral", scene: "ordinary", expressionIds: [],
+      action: { name: "bind" },
+    }),
+  });
+  mock.groupMessage({ text: "我想绑定大饼账号", at: 10001, messageId: 7104 });
+  await settle(300);
+
+  assert.match(sentText("send_private_msg"), /先发我邮箱/, "绑定步骤照旧私聊发过去");
+  assert.match(sentText("send_group_msg"), /绑定得私聊来/);
+  // 模型那句话必须被吞掉：它要是自己接一句「把邮箱密码发我」，就等于在群里索要凭据
+  assert.equal(sentText("send_group_msg").includes("那把邮箱密码发我吧"), false, "绑定不允许带引出语");
 });

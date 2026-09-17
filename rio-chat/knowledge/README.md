@@ -13,6 +13,25 @@
 
 在项目根目录运行 `node rio-chat/update-knowledge.cjs`，然后重新启动 Bot。需要 Node.js 自带 fetch 和外网连接。更新脚本先获取、转换全部数据，再逐文件原子替换；联网失败不会写入半截下载内容。运行时仅读本地快照，不自动访问外网。
 
+## 角色曲目索引（2026-09-17）
+
+`ongeki-characters.json` 是「音击角色 ↔ 曲目」索引，用来回答「某角色（包括梨绪自己）有哪些曲 / 原创曲 / 个人曲」。它由 `node rio-chat/update-characters.cjs` 生成，输入是三份数据：
+
+- 本地曲库快照：`ongeki-music-internal.json` 的对战相手（`boss`）与「歌：」署名，分类取自 `ongeki-song-catalog.json`。
+- `../knowledge/ongeki-character-notes.json` 里的 `personalSongs`：萌娘百科各角色条目写明的「个人曲」，一人一首。柏木美亜、皇城セツナ 没有可靠来源，留空，不能编。
+- 同一文件里的 `jacketNotes`：**人工逐张看图**核对过的曲绘判定，覆盖 155 首「分类是 オンゲキ、但没有演唱者署名」的曲子 —— 这批光看数据分不出曲绘上有没有角色。另有一个 `uncertain` 列表，那几首判定没把握。
+
+口径：
+
+- 她的曲＝对战相手是她，或「歌：」署名里有她（合唱曲的对战相手可能挂在别的成员身上）。
+- 原创曲＝上面这批里，分类为 **オンゲキ**，且曲绘不是「纯设计图/logo」。版权曲/联动曲以及チュウマイ/VARIETY 等移植曲不算原创曲。
+- 曲绘判定只用来排除**纯设计图/logo**：同一个角色换了色调或战斗装，看图很容易认成别人（梨绪的 `Ai C`、`Selenadia`、`淵底のグレイ・ユークロニア`、`MEGATON BLAST (tpz Overcute Remix)` 都被我误判成外注插画，用户逐首确认过其实都是她的）。所以「像别人的插画」不再作为排除依据。
+- 有演唱者署名的曲子，曲绘按「即演唱者」处理，没有再逐张看图。
+
+改曲绘判定时：编辑 `ongeki-character-notes.json`，再跑一次 `update-characters.cjs`。曲绘图源是 `https://norca0721.github.io/otoge-db/ongeki/jacket/<曲库里的 image_url>`（190×190）。
+
+发布到 public-bot 时，新增的 `ongeki-characters.json`、`ongeki-character-notes.json` 和 `update-characters.cjs` 要在 public-bot 里手动 `git add` —— `publish.js` 只自动带 `rio-chat/*.cjs`，`knowledge/` 下的文件靠公开仓库的索引同步。
+
 分发 QQ EXE 时保留其上一级的完整 `rio-chat` 目录，包括 `knowledge/*.json`。Discord 同样需要配置指向的 `rio-chat` 目录。不要只复制 EXE。
 
 ## 范围与后续

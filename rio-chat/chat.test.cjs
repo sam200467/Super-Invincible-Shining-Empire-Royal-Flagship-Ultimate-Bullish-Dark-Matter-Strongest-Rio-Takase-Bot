@@ -292,6 +292,27 @@ test_("group context from the adapter becomes a leading system note",async()=>{
  assert.equal(body.messages.filter(m=>m.role==="system").length,1);
  chat2.close();
 });
+test_("a quoted message from the adapter lands just before the user turn",async()=>{
+ const s=settings();let body;
+ const quoted="22:48 梨绪（我自己）：我从曲库里挑了几首：Reach For The Stars（13.9）、DADDY MULK（13.8）";
+ const chat=createChat(s,host,{adapter:{quoted:()=>quoted},
+   fetchImpl:async(u,o)=>{body=JSON.parse(o.body);return mock()()}});
+ // 避开「为什么」：那是检索策略里的「事实问答先核实」，那一轮不走模型，测不到提示词
+ await chat.handle(msg("a","<@123> 宝宝你刚才推的这几首是怎么挑的呀"));
+ // 请求末尾是 assistant 预填充（"{")，所以定位「最后一条 user」再往回看一格
+ const messages=body.messages, lastUser=messages.findLastIndex(m=>m.role==="user"), note=messages[lastUser-1];
+ assert.equal(note.role,"system");                      // 紧挨着用户那句话
+ assert.equal(messages[lastUser].role,"user");
+ assert.match(note.content,/Reach For The Stars/);
+ assert.match(note.content,/别当成没发生过/);            // 是引用对象，不是普通背景
+ assert.equal(messages.filter(m=>m.role==="system"&&m.content.includes("群里最近的消息")).length,0);
+ chat.close();
+ // 没有 quoted 钩子（或宿主读不到引用）时不插这条
+ const chat2=createChat(s,host,{adapter:{quoted:()=>""},fetchImpl:async(u,o)=>{body=JSON.parse(o.body);return mock()()}});
+ await chat2.handle(msg("b","<@123> 你好"));
+ assert.equal(body.messages.filter(m=>m.role==="system").length,1);
+ chat2.close();
+});
 test_("a tool call with no text of its own is still a valid reply",async()=>{
  const s=settings();
  const r=await requestReply(s,[{role:"user",content:"hi"}],{actions:specs,

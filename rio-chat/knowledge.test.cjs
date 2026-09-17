@@ -153,3 +153,91 @@ test('端到端：搜索失败时明说没资料，不退化成编造',async()=>
   fetchImpl:m.fetchImpl,webFetchImpl:async()=>{throw Error('boom')}});
  assert.match(reply.text,/没有拿到可核实的网页资料/);
 });
+
+// ---- 音击角色曲目索引 ----
+const {loadCharacters}=require('./knowledge.cjs');
+test('角色查询：常见叫法都能认，个人曲只有一首',()=>{
+ const knowledge=loadKnowledge(__dirname);
+ for(const name of ['高瀬 梨緒','高濑梨绪','梨绪','梨緒','rio','takase rio','TakaseRio']){
+  const result=lookup(knowledge,{character:name});
+  assert.equal(result.character.name,'高瀬 梨緒',name+' 应该认成梨绪');
+  assert.equal(result.personal.title,'Here We Go');
+  assert.equal(result.game,'ongeki');
+ }
+ // 角色查询不要求 game，也不能被其他条件带跑
+ assert.equal(lookup(knowledge,{game:'maimai',character:'梨绪'}).character.name,'高瀬 梨緒');
+ assert.equal(lookup(knowledge,{character:'小星'}).character.name,'井之原 小星');
+ assert.equal(lookup(knowledge,{character:'Miku'}).character.name,'初音ミク');
+});
+test('原创曲口径：要同时满足分类=オンゲキ 和 曲绘上有她',()=>{
+ const characters=loadCharacters(__dirname);
+ const originalOf=name=>new Set(characters.characters.find(char=>char.name===name)
+   .songs.filter(song=>song.original).map(song=>song.title));
+ const rio=originalOf('高瀬 梨緒');
+ assert.ok(rio.has('Here We Go'),'个人曲必须在原创曲里');
+ assert.ok(rio.has('Ai Nov'),'曲绘上是她、没有演唱者署名的也要算');
+ assert.ok(rio.has('MEGATON BLAST'));
+ // 分类不是音击原创曲的：チュウマイ/VARIETY 等移植曲，哪怕对战相手是她也不算
+ for(const title of ['AMAZING MIGHTYYYY!!!!','CO5M1C R4ILR0AD','Cyberozar','月詠に鳴る'])assert.ok(!rio.has(title),title);
+ // 版权曲里她只是对战相手
+ for(const title of ['Brain Power','フィクサー','スパッと！スパイ＆スパイス'])assert.ok(!rio.has(title),title);
+ // 换色调或战斗装的角色很容易被认成别人（实测误判过），所以只排除「纯设计图」这一种；
+ // 下面这几首是用户逐首确认过的：都是她的原创曲。
+ for(const title of ['Ai C','Selenadia','淵底のグレイ・ユークロニア','MEGATON BLAST (tpz Overcute Remix)'])
+  assert.ok(rio.has(title),title+' 被误判成别人的曲绘，不能排除');
+ // 反过来，纯 logo/花纹的曲绘仍然不算原创曲：明里的 Memories of O.N.G.E.K.I. 就是 logo 图
+ const akari=originalOf('星咲 あかり');
+ for(const title of ['Memories of O.N.G.E.K.I.','RED to RED'])assert.ok(!akari.has(title),title);
+ // 检索侧：列表有上限，必须同时给出完整数量，别让模型把列出来的当成全部
+ const result=lookup(loadKnowledge(__dirname),{character:'梨绪'});
+ assert.equal(result.counts.original,result.original.length+result.originalTruncated);
+ assert.ok(result.onlyBoss.length>0,'只是对战相手出现的曲子要单独列，不能混进原创曲');
+ // 组合曲的个人版单列：数字要分开，别把 12 首ソロver. 混进原创曲数量里
+ assert.equal(result.counts.soloVersions,12);
+ assert.ok(result.soloVersions.every(title=>/ソロver/i.test(title)));
+ assert.ok(result.original.every(title=>!/ソロver/i.test(title)),'原创曲列表里不能混进ソロver.');
+ assert.ok(result.soloVersions.includes('本能的 Survivor -高瀬 梨緒ソロver.-'));
+});
+test('认不出来的角色要报错，不能编人物或曲目',()=>{
+ const knowledge=loadKnowledge(__dirname);
+ const result=lookup(knowledge,{character:'不存在的角色'});
+ assert.match(result.error,/没认出/);
+ assert.equal(result.original,undefined);
+ assert.equal(result.personal,undefined);
+ assert.ok(Array.isArray(result.known)&&result.known.length>0,'要给出可用的角色名，别让用户干猜');
+ assert.ok(lookup({catalogs:{},titles:[]},{character:'梨绪'}).error,'没有角色索引时同样只报错');
+});
+test('策展数据自洽：每个个人曲都必须在本人曲目里',()=>{
+ const characters=loadCharacters(__dirname);
+ assert.equal(characters.characters.filter(char=>char.cast).length,17);
+ for(const char of characters.characters){
+  // 主角要有中文译名、简称、英文写法；客串角色只有本名也算够用（玩家问得少）
+  if(char.cast)assert.ok(char.aliases.length>=4,char.name+' 的别名太少，玩家常见的叫法要能命中');
+  if(!char.personal)continue;
+  assert.ok(char.songs.some(song=>song.title===char.personal.title),char.name+' 的个人曲不在曲目里');
+  assert.ok(char.songs.some(song=>song.title===char.personal.title&&song.original),char.name+' 的个人曲没被算成原创曲');
+ }
+});
+test('端到端：问「你有哪些原创曲」—— 曲目来自角色索引，版权曲不能混进去',async()=>{
+ const m=scripted([JSON.stringify({knowledgeQuery:{character:'梨绪',kind:'original'}}),
+   JSON.stringify({text:'我的原创曲不少，个人曲是 Here We Go。',scene:'explanation'})]);
+ const reply=await requestReply(flowSettings(),[{role:'user',content:'梨绪你有哪些原创曲？'}],{fetchImpl:m.fetchImpl});
+ const ev=evidenceOf(m.bodies.at(-1));
+ assert.equal(ev.length,1);
+ assert.equal(ev[0].character.name,'高瀬 梨緒');
+ assert.equal(ev[0].personal.title,'Here We Go');
+ assert.ok(ev[0].original.includes('Here We Go'));
+ assert.ok(!ev[0].original.includes('Brain Power'),'只是对战相手出现的版权曲不能进原创曲');
+ assert.equal(reply.research.knowledgeCalls,1);
+});
+test('角色名被当成曲名去搜时，直接按角色返回（实测模型会犯这个错）',()=>{
+ const knowledge=loadKnowledge(__dirname);
+ const result=lookup(knowledge,{game:'ongeki',title:'初音未来'});
+ assert.equal(result.character.name,'初音ミク');
+ assert.match(result.note,/角色名/);
+ assert.ok(result.counts.songs>0);
+ // 真曲名不能被这条兜底带偏
+ const song=lookup(knowledge,{game:'ongeki',title:'Here We Go'});
+ assert.ok(song.charts.length>0);
+ assert.equal(song.character,undefined);
+});
