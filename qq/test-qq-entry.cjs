@@ -59,10 +59,12 @@ function writeRioChatFixture(dir) {
 }
 
 // 假的 DeepSeek：按脚本返回一条 JSON 回复，不看请求内容（只看调用次数）
-const deepSeekStub = (body) => async () => ({
-  ok: true,
-  json: async () => ({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(body) } }] }),
-});
+// text() 和 json() 都要有：chat.cjs 先读 text 再 JSON.parse。
+const deepSeekReply = (body) => {
+  const payload = { choices: [{ finish_reason: "stop", message: { content: JSON.stringify(body) } }] };
+  return { ok: true, text: async () => JSON.stringify(payload), json: async () => payload };
+};
+const deepSeekStub = (body) => async () => deepSeekReply(body);
 
 async function setup(t, { bindings = {}, rioChat = false, fetchImpl = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "takase-qq-"));
@@ -335,6 +337,25 @@ test("NapCat 连接状态通过 BOT_NAPCAT 上报给界面", async (t) => {
 // ── 自然语言查分（聊天与查分统一）────────────────────────────────────
 const BOUND = { userId: USER, email: "a@b.c", password: "x", playerName: "测试玩家" };
 const chatReply = (body) => deepSeekStub(body);
+test('未绑定请求没鸟过的推荐：不调用模型、不发送随机曲目',async(t)=>{
+ let calls=0;
+ const {mock,sentText}=await setup(t,{rioChat:true,fetchImpl:async()=>{calls++;return deepSeekStub({text:'错误的随机推荐'})();}});
+ mock.groupMessage({text:'宝宝来点我没鸟过的12+推荐',at:10001,messageId:7991});
+ await settle(300);
+ assert.equal(calls,0);
+ assert.match(sentText('send_group_msg'),/没有绑定/);
+ assert.match(sentText('send_group_msg'),/#绑定/);
+ assert.doesNotMatch(sentText('send_group_msg'),/随机推荐/);
+});
+test('已绑定也不能把公共曲库当作个人成绩筛选结果',async(t)=>{
+ let calls=0;
+ const {mock,sentText}=await setup(t,{rioChat:true,bindings:{[USER]:BOUND},fetchImpl:async()=>{calls++;return deepSeekStub({text:'错误的随机推荐'})();}});
+ mock.groupMessage({text:'推荐我没鸟过的12+',at:10001,messageId:7992});
+ await settle(300);
+ assert.equal(calls,0);
+ assert.match(sentText('send_group_msg'),/没有接入按个人成绩筛选/);
+ assert.doesNotMatch(sentText('send_group_msg'),/没有绑定/);
+});
 
 test("@机器人 用大白话查分：模型挑工具，图片带聊天口气", async (t) => {
   const { mock, sentText } = await setup(t, {
@@ -438,7 +459,7 @@ test("出图之后，群上下文里读得到图上的数据", async (t) => {
     rioChat: true,
     fetchImpl: async (url, init) => {
       bodies.push(JSON.parse(init.body));
-      return { ok: true, json: async () => ({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ text: "嗯。", emotion: "neutral", scene: "ordinary", expressionIds: [] }) } }] }) };
+      return deepSeekReply({ text: "嗯。", emotion: "neutral", scene: "ordinary", expressionIds: [] });
     },
   });
   mock.groupMessage({ text: "#单曲 id870", messageId: 9301 });
@@ -459,7 +480,7 @@ test("群上下文：@机器人时带上刚才群里发生的事", async (t) => 
     rioChat: true,
     fetchImpl: async (url, init) => {
       bodies.push(JSON.parse(init.body));
-      return { ok: true, json: async () => ({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ text: "哼哼。", emotion: "neutral", scene: "ordinary", expressionIds: [] }) } }] }) };
+      return deepSeekReply({ text: "哼哼。", emotion: "neutral", scene: "ordinary", expressionIds: [] });
     },
   });
   mock.groupMessage({ text: "今天状态真差", userId: "10086", messageId: 8001 });   // 普通闲聊，没 @

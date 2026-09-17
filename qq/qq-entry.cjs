@@ -125,6 +125,7 @@ function createQqBot(config, deps = {}) {
     perGroupPerHour: config.perGroupPerHour,
     perUserPerHour: config.perUserPerHour,
     dailyCap: config.dailyCap,
+    duplicateWindowMs: config.duplicateWindowMs,
     // 连上后忽略最初几秒（NapCat 可能重投缓冲事件）；测试里设 0
     coldStartMs: config.coldStartMs,
   });
@@ -747,6 +748,9 @@ function createQqBot(config, deps = {}) {
             ability: (message) => "运行时实际能力：你正在 QQ 群中回复直接 @ 你的消息。可以按语境发送梨绪表情。用户想查成绩、查定数、算 Rating 时可以调用工具，结果和图片由程序发送。" + (message.__mentionHint || ""),
             actions: core.CAPABILITY_SPECS,
             actionTarget: true,
+            personalRecommendationNotice: message => require('../rio-chat/personal-recommendation.cjs').bindingNotice(
+              id=>core.getBinding(config,id),String(message.author.id),message.__mentionQqs||[],
+              '请私聊我发送 #绑定。'),
             accepts: message => config.allowedGroupIds.map(String).includes(String(message.channelId)),
             extractText: message => message.content,
             typing: async () => {},

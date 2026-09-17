@@ -45,6 +45,9 @@ execFileSync(process.execPath, ["--test", path.join(QQ, "test-qq-onebot.cjs")], 
 execFileSync(process.execPath, ["--test", path.join(QQ, "test-qq-entry.cjs")], { cwd: ROOT, stdio: "inherit" });
 // QQ 包里含 rio-chat/chat.cjs，工具调用契约坏了这边一样会挂
 execFileSync(process.execPath, ["--test", path.join(ROOT, "rio-chat/chat.test.cjs")], { cwd: ROOT, stdio: "inherit" });
+execFileSync(process.execPath, ["--test", path.join(ROOT, "rio-chat/knowledge.test.cjs")], { cwd: ROOT, stdio: "inherit" });
+execFileSync(process.execPath, ["--test", path.join(ROOT, "rio-chat/search.test.cjs")], { cwd: ROOT, stdio: "inherit" });
+execFileSync(process.execPath, ["--test", path.join(ROOT, "rio-chat/research-policy.test.cjs")], { cwd: ROOT, stdio: "inherit" });
 // 共享核心被改坏的话 QQ 版一样会挂，所以 Discord 侧的自测也要过
 execFileSync(process.execPath, [path.join(ROOT, "takase-discord-entry.mjs"), "--selftest"], { cwd: ROOT, stdio: "inherit" });
 

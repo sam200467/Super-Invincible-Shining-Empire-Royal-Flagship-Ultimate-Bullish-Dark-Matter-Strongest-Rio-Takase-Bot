@@ -5,13 +5,11 @@ import rioChatModule from "./rio-chat/chat.cjs";
 const { loadSettings: loadRioSettings, createChat: createRioChat } = rioChatModule;
 import aliasStoreModule from "./song-alias-store.cjs";
 const { SongAliasStore } = aliasStoreModule;
-import { Converter } from "opencc-js";
 import path from "node:path";
 import os from "node:os";
-import { spawn } from "node:child_process";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { ProxyAgent } from "undici";
-import INTERNAL_SONGS from "./ongeki-music-internal.json";
+import core from "./takase-core.cjs";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -28,31 +26,56 @@ import {
   TextInputStyle,
 } from "discord.js";
 
-const VERSION = "1.15.1-rio-chat";
-const GENERATE_COOLDOWN_MS = 60 * 1000;
+// 平台无关部分全部来自 takase-core.cjs（QQ 版共用同一份）。
+// 用默认导入再解构，避免依赖 Node 对 CJS 具名导出的静态分析。
+const {
+  GENERATE_COOLDOWN_MS,
+  MAX_QUEUE,
+  PLATE_CHOICES,
+  LEVEL_CHOICES,
+  INTERNAL_SONGS,
+  emit,
+  safeError,
+  normalizeSongQuery,
+  normalizeLevelCommandQuery,
+  levelCommandTarget,
+  searchSongs,
+  parseChartInfoQuery,
+  songHasChartDifficulty,
+  searchChartInfo,
+  songAutocomplete,
+  aliasAutocomplete,
+  getAliasStore,
+  setAliasStore,
+  configureAliases,
+  configureCapabilities,
+  capabilityHint,
+  CAPABILITY_SPECS,
+  resolveCapability,
+  escapeDiscordText,
+  chartInfoMatchLines,
+  songMatchLines,
+  splitLines: splitDiscordLines,
+  calculateBaseRating,
+  calculateSingleRating,
+  readConfig,
+  runProcess,
+  vaultCall,
+  getBinding,
+  saveBinding,
+  runCore,
+  verifyAccount,
+  generateChart,
+  generateSongChart,
+  generateChartInfo,
+  generateCompletionChart,
+  generateLevelChart,
+} = core;
+
+const VERSION = "1.16.0-rio-chat";
 // discord.js 默认只给 REST 请求 15 秒。分表图片约 5–6 MiB，经代理上传时
 // 很容易超过默认值并抛出 “This operation was aborted”。
 const DISCORD_REST_TIMEOUT_MS = 120 * 1000;
-// Discord interaction tokens are valid for a limited time; three waiting jobs keeps the
-// worst-case reply comfortably inside that window even when each render takes several minutes.
-const MAX_QUEUE = 3;
-const PLATE_CHOICES = Object.freeze([
-  { id: "040100", nameJa: "桜撃", nameZhHans: "樱击", version: "ONGEKI" },
-  { id: "040105", nameJa: "進撃", nameZhHans: "进击", version: "ONGEKI PLUS" },
-  { id: "040110", nameJa: "夏撃", nameZhHans: "夏击", version: "ONGEKI SUMMER" },
-  { id: "040115", nameJa: "波撃", nameZhHans: "波击", version: "ONGEKI SUMMER PLUS" },
-  { id: "040120", nameJa: "赤撃", nameZhHans: "赤击", version: "ONGEKI R.E.D." },
-  { id: "040125", nameJa: "皇撃", nameZhHans: "皇击", version: "ONGEKI R.E.D. PLUS" },
-  { id: "040130", nameJa: "輝撃", nameZhHans: "辉击", version: "ONGEKI bright" },
-  { id: "040135", nameJa: "耀撃", nameZhHans: "耀击", version: "ONGEKI bright MEMORY Act.1" },
-  { id: "040140", nameJa: "閃撃", nameZhHans: "闪击", version: "ONGEKI bright MEMORY Act.2" },
-  { id: "040145", nameJa: "想撃", nameZhHans: "想击", version: "ONGEKI bright MEMORY Act.3" },
-  { id: "040150", nameJa: "爽撃", nameZhHans: "爽击", version: "ONGEKI Re:Fresh Act.1" },
-]);
-const LEVEL_CHOICES = Object.freeze([
-  "0", "1", "2", "3", "4", "5", "6", "7", "7+", "8", "8+", "9", "9+",
-  "10", "10+", "11", "11+", "12", "12+", "13", "13+", "14", "14+", "15", "15+",
-]);
 const COMMANDS = [
   new SlashCommandBuilder().setName("constant").setNameLocalizations({"zh-CN":"定数表查询","zh-TW":"定數表查詢"})
     .setDescription("Show a chart constant table, e.g. 14 or 14.2")
@@ -71,7 +94,13 @@ const COMMANDS = [
     .setName("chart")
     .setNameLocalizations({ "zh-CN": "分表", "zh-TW": "分表" })
     .setDescription("Generate your ONGEKI B50 + N10 + P50 chart")
-    .setDescriptionLocalizations({ "zh-CN": "生成自己的音击 B50 + N10 + P50 分表", "zh-TW": "生成自己的音擊 B50 + N10 + P50 分表" }),
+    .setDescriptionLocalizations({ "zh-CN": "生成自己的音击 B50 + N10 + P50 分表", "zh-TW": "生成自己的音擊 B50 + N10 + P50 分表" })
+    .addUserOption((option) => option
+      .setName("user")
+      .setNameLocalizations({ "zh-CN": "查询对象", "zh-TW": "查詢對象" })
+      .setDescription("Query another member's scores (they must have allowed it)")
+      .setDescriptionLocalizations({ "zh-CN": "查别人，需要对方开放过（默认只查自己）", "zh-TW": "查別人，需要對方開放過" })
+      .setRequired(false)),
   new SlashCommandBuilder()
     .setName("plate")
     .setNameLocalizations({ "zh-CN": "牌子", "zh-TW": "牌子" })
@@ -86,7 +115,13 @@ const COMMANDS = [
       .addChoices(...PLATE_CHOICES.map((plate) => ({
         name: `${plate.nameJa}（${plate.nameZhHans}） / ${plate.version}`,
         value: plate.id,
-      })))),
+      }))))
+    .addUserOption((option) => option
+      .setName("user")
+      .setNameLocalizations({ "zh-CN": "查询对象", "zh-TW": "查詢對象" })
+      .setDescription("Query another member's scores (they must have allowed it)")
+      .setDescriptionLocalizations({ "zh-CN": "查别人，需要对方开放过（默认只查自己）", "zh-TW": "查別人，需要對方開放過" })
+      .setRequired(false)),
   new SlashCommandBuilder()
     .setName("song")
     .setNameLocalizations({ "zh-CN": "单曲", "zh-TW": "單曲" })
@@ -99,7 +134,13 @@ const COMMANDS = [
       .setDescriptionLocalizations({ "zh-CN": "完整 Song ID、完整曲名或部分曲名（不区分大小写）", "zh-TW": "完整 Song ID、完整曲名或部分曲名（不區分大小寫）" })
       .setRequired(true)
       .setAutocomplete(true)
-      .setMaxLength(200)),
+      .setMaxLength(200))
+    .addUserOption((option) => option
+      .setName("user")
+      .setNameLocalizations({ "zh-CN": "查询对象", "zh-TW": "查詢對象" })
+      .setDescription("Query another member's scores (they must have allowed it)")
+      .setDescriptionLocalizations({ "zh-CN": "查别人，需要对方开放过（默认只查自己）", "zh-TW": "查別人，需要對方開放過" })
+      .setRequired(false)),
   new SlashCommandBuilder()
     .setName("chartinfo")
     .setNameLocalizations({ "zh-CN": "谱面分析", "zh-TW": "譜面分析" })
@@ -132,7 +173,13 @@ const COMMANDS = [
       .setDescriptionLocalizations({ "zh-CN": "从 1 开始的页码，每页最多 70 张谱面", "zh-TW": "從 1 開始的頁碼，每頁最多 70 張譜面" })
       .setRequired(false)
       .setMinValue(1)
-      .setMaxValue(99)),
+      .setMaxValue(99))
+    .addUserOption((option) => option
+      .setName("user")
+      .setNameLocalizations({ "zh-CN": "查询对象", "zh-TW": "查詢對象" })
+      .setDescription("Query another member's scores (they must have allowed it)")
+      .setDescriptionLocalizations({ "zh-CN": "查别人，需要对方开放过（默认只查自己）", "zh-TW": "查別人，需要對方開放過" })
+      .setRequired(false)),
   new SlashCommandBuilder()
     .setName("calculate")
     .setNameLocalizations({ "zh-CN": "计算", "zh-TW": "計算" })
@@ -201,154 +248,11 @@ const COMMANDS = [
   new SlashCommandBuilder().setName("whatis").setNameLocalizations({ "zh-CN": "是什么歌", "zh-TW": "是什麼歌" })
     .setDescription("按别名反查对应歌曲")
     .addStringOption(o => o.setName("query").setNameLocalizations({ "zh-CN": "别名", "zh-TW": "別名" }).setDescription("输入完整或部分别名，支持简繁模糊搜索").setRequired(true).setAutocomplete(true).setMaxLength(100)),
+  new SlashCommandBuilder().setName("allowquery").setNameLocalizations({ "zh-CN": "允许查询", "zh-TW": "允許查詢" })
+    .setDescription("允许群友查询你的成绩（默认关闭）"),
+  new SlashCommandBuilder().setName("denyquery").setNameLocalizations({ "zh-CN": "禁止查询", "zh-TW": "禁止查詢" })
+    .setDescription("禁止群友查询你的成绩（默认就是这样）"),
 ].map((command) => command.toJSON());
-
-function emit(tag, value = "") {
-  process.stdout.write(tag + (value === "" ? "" : ":" + String(value)) + "\n");
-}
-
-function safeError(error) {
-  return String(error?.message || error || "未知错误")
-    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[代理凭据已隐藏]@")
-    .replace(/([\w.+-]{1,80})@([\w.-]{1,120})/g, "[邮箱已隐藏]")
-    .replace(/(secret|password|passwd|token|authorization)\s*[:=]\s*[^\s,;]+/gi, "$1=[已隐藏]")
-    .replace(/[A-Za-z0-9_.-]{48,}/g, "[敏感内容已隐藏]")
-    .slice(0, 800);
-}
-
-const simplifySongQuery = Converter({ from: "tw", to: "cn" });
-
-function normalizeSongQuery(value) {
-  return simplifySongQuery(String(value || "")
-    .normalize("NFKC")
-    .replace(/[\s　]+/g, " ")
-    .trim()
-    .toLowerCase());
-}
-
-function normalizeLevelCommandQuery(value) {
-  const query = String(value || "")
-    .normalize("NFKC")
-    .trim()
-    .toUpperCase()
-    .replace(/^LEVEL\s*/i, "")
-    .replace(/^LV\.?\s*/i, "")
-    .replace(/\s+/g, "");
-  if (query === "ABFB" || LEVEL_CHOICES.includes(query)) return query;
-  if (/^\d{1,2}\.\d$/.test(query)) {
-    const constant = Number(query);
-    if (constant >= 0 && constant <= 15.9) return constant.toFixed(1);
-  }
-  return "";
-}
-
-function levelCommandTarget(query) {
-  if (query === "ABFB") return "ABFB 全难度";
-  if (/^\d+\.\d$/.test(query)) return `定数 ${query}`;
-  return `LEVEL ${query}`;
-}
-
-let songAliases = new SongAliasStore(null, normalizeSongQuery);
-
-const SONG_SEARCH_INDEX = INTERNAL_SONGS.map(song => ({ song, title: normalizeSongQuery(song?.name) }));
-
-function searchSongs(query) {
-  const raw = String(query || "").normalize("NFKC").trim();
-  if (!raw) return [];
-  const idMatch = raw.match(/^(?:id\s*)?(\d+)$/i);
-  if (idMatch) {
-    const id = Number(idMatch[1]);
-    return INTERNAL_SONGS.filter((song) => Number(song?.id) === id);
-  }
-  const needle = normalizeSongQuery(raw);
-  return SONG_SEARCH_INDEX
-    .filter(({ song, title }) => title.includes(needle) || songAliases.matches(song.id, needle))
-    .map(({ song }) => song)
-    .sort((a, b) => Number(a.id) - Number(b.id));
-}
-
-const CHART_INFO_DIFFICULTY_ALIASES = Object.freeze(new Map([
-  ["basic", 0], ["bas", 0], ["bsc", 0], ["绿", 0], ["绿谱", 0], ["緑", 0], ["緑譜", 0],
-  ["advanced", 1], ["adv", 1], ["黄", 1], ["黄谱", 1], ["黃", 1], ["黃譜", 1],
-  ["expert", 2], ["exp", 2], ["红", 2], ["红谱", 2], ["紅", 2], ["紅譜", 2],
-  ["master", 3], ["mas", 3], ["mst", 3], ["紫", 3], ["紫谱", 3], ["紫譜", 3],
-  ["lunatic", 10], ["lun", 10], ["lnt", 10], ["白", 10], ["白谱", 10], ["白譜", 10],
-]));
-const CHART_INFO_DIFFICULTY_NAMES = Object.freeze({ 0: "BASIC", 1: "ADVANCED", 2: "EXPERT", 3: "MASTER", 10: "LUNATIC" });
-const CHART_INFO_DIFFICULTY_POSITIONS = Object.freeze({ 0: 0, 1: 1, 2: 2, 3: 3, 10: 4 });
-
-function parseChartInfoQuery(value) {
-  const normalized = String(value || "").normalize("NFKC").replace(/[\s　]+/g, " ").trim();
-  const match = normalized.match(/^(.*\S)\s+(\S+)$/);
-  if (!match) return null;
-  const difficultyId = CHART_INFO_DIFFICULTY_ALIASES.get(match[2].toLowerCase());
-  if (difficultyId === undefined) return null;
-  return { songQuery: match[1].trim(), difficultyId, difficultyName: CHART_INFO_DIFFICULTY_NAMES[difficultyId] };
-}
-
-function songHasChartDifficulty(song, difficultyId) {
-  const position = CHART_INFO_DIFFICULTY_POSITIONS[difficultyId];
-  if (position === undefined) return false;
-  const level = song?.level?.[position];
-  const constant = Number(song?.const?.[position]);
-  const notes = Number(song?.noteTotal?.[position]);
-  return level !== null && level !== undefined && String(level).trim() !== "" && String(level) !== "-" &&
-    Number.isFinite(constant) && constant >= 0 && Number.isFinite(notes) && notes > 0;
-}
-
-function searchChartInfo(value) {
-  const parsed = parseChartInfoQuery(value);
-  if (!parsed) return { parsed: null, matches: [] };
-  const matches = searchSongs(parsed.songQuery)
-    .filter((song) => songHasChartDifficulty(song, parsed.difficultyId))
-    .map((song) => ({ song, difficultyId: parsed.difficultyId, difficultyName: parsed.difficultyName }));
-  return { parsed, matches };
-}
-
-// Candidate values use IDs so duplicate titles and shortened labels stay unambiguous.
-function songAutocomplete(commandName, value) {
-  if (!["song", "chartinfo"].includes(commandName)) return [];
-  const raw = String(value || "").normalize("NFKC").replace(/[\s　]+/g, " ").trim();
-  let query = raw;
-  let difficulties = [3, 2, 1, 0, 10];
-  if (commandName === "chartinfo") {
-    const parsed = parseChartInfoQuery(raw);
-    if (parsed) {
-      query = parsed.songQuery;
-      difficulties = [parsed.difficultyId];
-    } else {
-      const suffix = raw.match(/^(.*\S)\s+(\S+)$/);
-      const partial = suffix && [...CHART_INFO_DIFFICULTY_ALIASES]
-        .filter(([alias]) => alias.startsWith(suffix[2].toLowerCase())).map(([, id]) => id);
-      if (partial?.length) {
-        query = suffix[1];
-        difficulties = [...new Set(partial)];
-      }
-    }
-  }
-  const needle = normalizeSongQuery(query);
-  const idMatch = query.match(/^(?:id\s*)?(\d+)$/i);
-  const songs = SONG_SEARCH_INDEX.filter(({ song, title }) => !needle ||
-    (idMatch ? String(song.id).startsWith(idMatch[1]) : title.includes(needle) || songAliases.matches(song.id, needle)))
-    .sort((a, b) => {
-      const rank = item => idMatch ? (String(item.song.id) === idMatch[1] ? 0 : 1)
-        : item.title === needle || songAliases.matches(item.song.id, needle, true) ? 0 : item.title.startsWith(needle) ? 1 : 2;
-      return rank(a) - rank(b) || Number(a.song.id) - Number(b.song.id);
-    });
-  const choices = [];
-  for (const { song } of songs) {
-    const entries = commandName === "song" ? [null] : difficulties.filter(id => songHasChartDifficulty(song, id));
-    for (const id of entries) {
-      const difficulty = id === null ? "" : CHART_INFO_DIFFICULTY_NAMES[id];
-      choices.push({
-        name: ("id" + song.id + " " + (difficulty ? "[" + difficulty + "] " : "") + song.name + " — " + (song.artistName || "")).slice(0, 100),
-        value: "id" + song.id + (difficulty ? " " + difficulty.toLowerCase() : ""),
-      });
-      if (choices.length === 25) return choices;
-    }
-  }
-  return choices;
-}
 
 async function handleAutocomplete(interaction, config) {
   if (assertAllowedInteraction(interaction, config)) return interaction.respond([]);
@@ -357,27 +261,13 @@ async function handleAutocomplete(interaction, config) {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return interaction.respond([]);
     const matches = searchSongs(interaction.options.getString("query") || "");
     const needle = normalizeSongQuery(focused.value);
-    return interaction.respond(matches.length === 1 ? songAliases.list(matches[0].id)
+    return interaction.respond(matches.length === 1 ? getAliasStore().list(matches[0].id)
       .filter(alias => normalizeSongQuery(alias).includes(needle)).slice(0, 25).map(alias => ({ name: alias, value: alias })) : []);
   }
   if (focused.name !== "query") return interaction.respond([]);
   if (interaction.commandName === "whatis") return interaction.respond(aliasAutocomplete(focused.value));
   const command = ["aliasadd", "aliasdelete", "aliases"].includes(interaction.commandName) ? "song" : interaction.commandName;
   return interaction.respond(songAutocomplete(command, focused.value));
-}
-
-function aliasAutocomplete(value) {
-  const needle = normalizeSongQuery(value);
-  const seen = new Set();
-  const choices = [];
-  for (const entry of songAliases.entries) {
-    const key = normalizeSongQuery(entry.alias);
-    if (!key.includes(needle) || seen.has(key)) continue;
-    seen.add(key);
-    choices.push({ name: entry.alias, value: entry.alias });
-    if (choices.length === 25) break;
-  }
-  return choices;
 }
 
 async function replyAliasLines(interaction, header, lines, footer = "", privateReply = false) {
@@ -397,7 +287,7 @@ async function handleAliasCommand(interaction) {
   const query = interaction.options.getString("query", true);
   if (name === "whatis") {
     const needle = normalizeSongQuery(query);
-    const matches = needle ? INTERNAL_SONGS.filter(song => songAliases.matches(song.id, needle)) : [];
+    const matches = needle ? INTERNAL_SONGS.filter(song => getAliasStore().matches(song.id, needle)) : [];
     return replyAliasLines(interaction, matches.length ? "匹配到以下别名对应的曲目：" : "没有找到这个别名。可以从输入候选中选择已登记别名，或用 /aliases 查看某首歌的全部别名。", songMatchLines(matches));
   }
   const matches = searchSongs(query);
@@ -406,123 +296,25 @@ async function handleAliasCommand(interaction) {
   }
   const song = matches[0];
   if (name === "aliases") {
-    const aliases = songAliases.list(song.id);
+    const aliases = getAliasStore().list(song.id);
     return replyAliasLines(interaction, songMatchLines([song])[0] + " 的全部别名（" + aliases.length + " 个）：",
       aliases.length ? aliases.map(alias => "• " + escapeDiscordText(alias)) : ["暂未添加别名。"]);
   }
   let alias;
-  try { alias = songAliases.validateAlias(interaction.options.getString("alias", true)); }
+  try { alias = getAliasStore().validateAlias(interaction.options.getString("alias", true)); }
   catch (error) { return interaction.reply({ content: error.message, ...(name === "aliasadd" ? {} : { flags: MessageFlags.Ephemeral }) }); }
   await interaction.deferReply(name === "aliasadd" ? {} : { flags: MessageFlags.Ephemeral });
   if (name === "aliasdelete") {
-    const result = songAliases.remove(Number(song.id), alias);
+    const result = getAliasStore().remove(Number(song.id), alias);
     return interaction.editReply({ content: (result.removed ? "已删除别名：" : "这首歌没有该别名：") + escapeDiscordText(alias) + " → " + songMatchLines([song])[0], allowedMentions: { parse: [] } });
   }
-  const result = songAliases.add(Number(song.id), alias, interaction.user.id);
-  const shared = INTERNAL_SONGS.filter(other => other.id !== song.id && songAliases.matches(other.id, normalizeSongQuery(alias), true));
+  const result = getAliasStore().add(Number(song.id), alias, interaction.user.id);
+  const shared = INTERNAL_SONGS.filter(other => other.id !== song.id && getAliasStore().matches(other.id, normalizeSongQuery(alias), true));
   await interaction.editReply({
     content: (result.added ? "已添加别名：" : "这首歌已有该别名（简繁、大小写视为相同）：") + escapeDiscordText(alias) + " → " + songMatchLines([song])[0] +
       (shared.length ? "\n这个别名还对应 " + shared.length + " 首歌；查询时会列出全部对应曲目。" : ""),
     allowedMentions: { parse: [] },
   });
-}
-
-function chartInfoMatchLines(matches) {
-  return matches.map(({ song, difficultyName }) =>
-    `id${song.id}　${escapeDiscordText(song.name)}　[${difficultyName}]　— ${escapeDiscordText(song.artistName)}`
-  );
-}
-
-function calculateBaseRating(chartConstant, score) {
-  if (score >= 1010000) return chartConstant + 2.0;
-  if (score >= 1007500) {
-    return chartConstant + 1.75 + (score - 1007500) * (2.0 - 1.75) / (1010000.0 - 1007500.0);
-  }
-  if (score >= 1000000) {
-    return chartConstant + 1.25 + (score - 1000000) * (1.75 - 1.25) / (1007500.0 - 1000000.0);
-  }
-  if (score >= 990000) {
-    return chartConstant + 0.75 + (score - 990000) * (1.25 - 0.75) / (1000000.0 - 990000.0);
-  }
-  if (score >= 970000) {
-    return chartConstant + (score - 970000) * (0.75 - 0.0) / (990000.0 - 970000.0);
-  }
-  if (score >= 900000) {
-    return chartConstant - 4.0 + (score - 900000) * (0.0 - (-4.0)) / (970000.0 - 900000.0);
-  }
-  if (score >= 800000) {
-    return chartConstant - 6.0 + (score - 800000) * (-4.0 - (-6.0)) / (900000.0 - 800000.0);
-  }
-  if (score >= 500000) return (score - 500000) * (-6.0) / (800000.0 - 500000.0);
-  return 0;
-}
-
-function calculateSingleRating(chartConstant, score, bellMark, comboMark) {
-  if (!Number.isFinite(chartConstant) || chartConstant < 0 || chartConstant > 20 ||
-      Math.abs(chartConstant * 10 - Math.round(chartConstant * 10)) > 1e-9) {
-    throw new Error("谱面定数不合法：请输入 0–20，且最多一位小数（如 13、13.0、13.4）。");
-  }
-  if (!Number.isInteger(score) || score < 0 || score > 1010000) {
-    throw new Error("技术分不合法：请输入 0–1010000 的纯整数。");
-  }
-  if (!new Set(["none", "fb"]).has(bellMark)) throw new Error("铃铛加成只能选择 FB 或无。");
-  if (!new Set(["none", "fc", "ab", "ab-plus"]).has(comboMark)) throw new Error("连击加成只能选择 FC、AB、AB+ 或无。");
-
-  const baseRating = calculateBaseRating(chartConstant, score);
-  const scoreMark = score >= 1007500 ? "SSS+" : score >= 1000000 ? "SSS" : score >= 990000 ? "SS" : "无";
-  const scoreBonus = scoreMark === "SSS+" ? 0.30 : scoreMark === "SSS" ? 0.20 : scoreMark === "SS" ? 0.10 : 0;
-  const bellBonus = bellMark === "fb" ? 0.05 : 0;
-  const comboBonus = comboMark === "fc" ? 0.10 : comboMark === "ab" ? 0.30 : comboMark === "ab-plus" ? 0.35 : 0;
-  const total = baseRating + scoreBonus + bellBonus + comboBonus;
-  const truncateTwo = (value) => Math.trunc(value * 100) / 100;
-  const compact = (value) => String(truncateTwo(value));
-  const comboLabel = comboMark === "fc" ? "FC" : comboMark === "ab" ? "AB" : comboMark === "ab-plus" ? "AB+" : "无";
-  return {
-    result: truncateTwo(total).toFixed(2),
-    text: "基础分 " + truncateTwo(baseRating).toFixed(2) +
-      " + 成绩加成 " + compact(scoreBonus) + "（" + scoreMark + "）" +
-      "+ 铃铛 " + compact(bellBonus) + "（" + (bellMark === "fb" ? "FB" : "无") + "）" +
-      "+ 连击 " + compact(comboBonus) + "（" + comboLabel + "）" +
-      "= " + truncateTwo(total).toFixed(2),
-  };
-}
-
-function escapeDiscordText(value) {
-  return String(value || "").replace(/([\\`*_{}[\]()<>#+\-.!|])/g, "\\$1");
-}
-
-function songMatchLines(matches) {
-  return matches.map((song) => {
-    const lunaticMark = song.isLunatic === true ? " [LUNATIC]" : "";
-    return `id${song.id}　${escapeDiscordText(song.name)}${lunaticMark}　— ${escapeDiscordText(song.artistName)}`;
-  });
-}
-
-function splitDiscordLines(header, lines, footer, limit = 1900) {
-  const chunks = [];
-  let current = header;
-  for (const line of lines) {
-    const addition = (current ? "\n" : "") + line;
-    if (current && current.length + addition.length > limit) {
-      chunks.push(current);
-      current = line;
-    } else current += addition;
-  }
-  const footerAddition = (current ? "\n" : "") + footer;
-  if (current.length + footerAddition.length > limit) {
-    if (current) chunks.push(current);
-    current = footer;
-  } else current += footerAddition;
-  if (current) chunks.push(current);
-  return chunks;
-}
-
-async function readConfig() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
-  const text = Buffer.concat(chunks).toString("utf8").replace(/^\uFEFF/, "").trim();
-  if (!text) throw new Error("未收到启动配置");
-  return JSON.parse(text);
 }
 
 function validateSnowflake(value, label) {
@@ -545,205 +337,6 @@ function validateConfig(config) {
   }
 }
 
-function runProcess(exe, args, input = "", timeoutMs = 15000, env) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(exe, args, { windowsHide: true, env: env || process.env, stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      child.kill();
-      reject(new Error("子进程执行超时"));
-    }, timeoutMs);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (data) => { stdout += data; });
-    child.stderr.on("data", (data) => { stderr += data; });
-    child.on("error", (error) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("exit", (code) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr });
-    });
-    child.stdin.end(input, "utf8");
-  });
-}
-
-async function vaultCall(config, command, args = [], input = "") {
-  const result = await runProcess(config.vaultHelperPath, [command, config.vaultPath, ...args], input, 15000);
-  if (result.code === 4) return null;
-  if (result.code !== 0) throw new Error(result.stderr.replace(/^VAULT_ERROR:/, "").trim() || "本地加密账号库操作失败");
-  return result.stdout;
-}
-
-async function getBinding(config, userId) {
-  const text = await vaultCall(config, "get", [userId]);
-  return text ? JSON.parse(text) : null;
-}
-
-async function saveBinding(config, entry) {
-  await vaultCall(config, "set", [], JSON.stringify(entry));
-}
-
-function runCore(config, mode, job, timeoutMs, onLine) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(config.corePath, [mode], {
-      cwd: config.workDir,
-      windowsHide: true,
-      env: {
-        ...process.env,
-        ONGEKI_APP_DIR: config.workDir,
-        // 分表核心（ongeki-core）用同一代理访问 u.otogame / reiwa 渲染服务
-        ONGEKI_HTTPS_PROXY: config.proxyUrl || "",
-        ONGEKI_HTTP_PROXY: config.proxyUrl || "",
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      child.kill();
-      reject(new Error("操作超时，已中止本次任务"));
-    }, timeoutMs);
-    const receive = (isError, data) => {
-      const text = String(data);
-      if (isError) stderr += text;
-      else stdout += text;
-      for (const line of text.split(/\r?\n/)) if (line.trim()) onLine(line.trim());
-    };
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (data) => receive(false, data));
-    child.stderr.on("data", (data) => receive(true, data));
-    child.on("error", (error) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("exit", (code) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      if (code !== 0) {
-        const detail = stderr.match(/(?:CONSTANT_JOB|CHART_INFO_JOB|COMPLETION_JOB|LEVEL_JOB|SONG_JOB|JOB|VERIFY)_ERROR:\s*(.+)/)?.[1] || "分表核心异常退出";
-        reject(new Error(detail + "（代码 " + code + "）"));
-      } else resolve({ stdout, stderr });
-    });
-    child.stdin.end(JSON.stringify(job), "utf8");
-  });
-}
-
-async function verifyAccount(config, email, password, onLine) {
-  const result = await runCore(config, "--verify-job-stdin", { email, password }, 120000, onLine);
-  const playerName = result.stdout.match(/^PLAYER_NAME:(.+)$/m)?.[1]?.trim();
-  if (!playerName) throw new Error("账号验证成功，但没有读取到玩家名");
-  return playerName;
-}
-
-async function generateChart(config, binding, onLine) {
-  const result = await runCore(config, "--job-stdin", {
-    email: binding.email,
-    password: binding.password,
-    streamOutput: true, // 图片不落盘，以 base64 经 stdout 返回
-  }, 360000, onLine);
-  const streamed = result.stdout.match(/^OUTPUT_BASE64:([^:]+):(.+)$/m);
-  if (streamed) return { name: streamed[1], buffer: Buffer.from(streamed[2], "base64") };
-  // 兼容回退：旧核心仍可能写文件，读取后立即删除
-  const outputPath = result.stdout.match(/^OUTPUT_FILE:(.+)$/m)?.[1]?.trim();
-  if (!outputPath || !fs.existsSync(outputPath)) throw new Error("分表核心未返回有效的图片数据");
-  const buffer = fs.readFileSync(outputPath);
-  try { fs.unlinkSync(outputPath); } catch {}
-  return { name: path.basename(outputPath), buffer };
-}
-
-async function generateSongChart(config, binding, song, onLine) {
-  const result = await runCore(config, "--song-job-stdin", {
-    email: binding.email,
-    password: binding.password,
-    playerName: binding.playerName || "",
-    songId: Number(song.id),
-    streamOutput: true,
-  }, 360000, onLine);
-  const streamed = result.stdout.match(/^SONG_OUTPUT_BASE64:([^:]+):(.+)$/m);
-  if (streamed) return { name: streamed[1], buffer: Buffer.from(streamed[2], "base64") };
-  const outputPath = result.stdout.match(/^SONG_OUTPUT_FILE:(.+)$/m)?.[1]?.trim();
-  if (!outputPath || !fs.existsSync(outputPath)) throw new Error("分表核心未返回有效的单曲图片数据");
-  const buffer = fs.readFileSync(outputPath);
-  try { fs.unlinkSync(outputPath); } catch {}
-  return { name: path.basename(outputPath), buffer };
-}
-
-async function generateChartInfo(config, match, onLine) {
-  const result = await runCore(config, "--chart-info-job-stdin", {
-    songId: Number(match.song.id),
-    difficultyId: Number(match.difficultyId),
-    streamOutput: true,
-  }, 180000, onLine);
-  const summaryText = result.stdout.match(/^CHART_INFO_SUMMARY:(.+)$/m)?.[1];
-  let meta = null;
-  try { if (summaryText) meta = JSON.parse(summaryText); } catch {}
-  const streamed = result.stdout.match(/^CHART_INFO_OUTPUT_BASE64:([^:]+):(.+)$/m);
-  if (streamed) return { name: streamed[1], buffer: Buffer.from(streamed[2], "base64"), meta };
-  const outputPath = result.stdout.match(/^CHART_INFO_OUTPUT_FILE:(.+)$/m)?.[1]?.trim();
-  if (!outputPath || !fs.existsSync(outputPath)) throw new Error("分表核心未返回有效的谱面分析图片数据");
-  const buffer = fs.readFileSync(outputPath);
-  try { fs.unlinkSync(outputPath); } catch {}
-  return { name: path.basename(outputPath), buffer, meta };
-}
-
-async function generateCompletionChart(config, binding, plate, onLine) {
-  const result = await runCore(config, "--completion-job-stdin", {
-    email: binding.email,
-    password: binding.password,
-    playerName: binding.playerName || "",
-    plateId: plate.id,
-    streamOutput: true,
-  }, 600000, onLine);
-  const summaryText = result.stdout.match(/^COMPLETION_SUMMARY:(.+)$/m)?.[1];
-  let meta = null;
-  try { if (summaryText) meta = JSON.parse(summaryText); } catch {}
-  const streamed = result.stdout.match(/^COMPLETION_OUTPUT_BASE64:([^:]+):(.+)$/m);
-  if (streamed) return { name: streamed[1], buffer: Buffer.from(streamed[2], "base64"), meta };
-  const outputPath = result.stdout.match(/^COMPLETION_OUTPUT_FILE:(.+)$/m)?.[1]?.trim();
-  if (!outputPath || !fs.existsSync(outputPath)) throw new Error("分表核心未返回有效的牌子完成度图片数据");
-  const buffer = fs.readFileSync(outputPath);
-  try { fs.unlinkSync(outputPath); } catch {}
-  return { name: path.basename(outputPath), buffer, meta };
-}
-
-async function generateLevelChart(config, binding, level, page, onLine) {
-  const result = await runCore(config, "--level-job-stdin", {
-    email: binding.email,
-    password: binding.password,
-    playerName: binding.playerName || "",
-    level,
-    page,
-    streamOutput: true,
-  }, 600000, onLine);
-  const summaryText = result.stdout.match(/^LEVEL_SUMMARY:(.+)$/m)?.[1];
-  let meta = null;
-  try { if (summaryText) meta = JSON.parse(summaryText); } catch {}
-  const streamed = result.stdout.match(/^LEVEL_OUTPUT_BASE64:([^:]+):(.+)$/m);
-  if (streamed) return { name: streamed[1], buffer: Buffer.from(streamed[2], "base64"), meta };
-  const outputPath = result.stdout.match(/^LEVEL_OUTPUT_FILE:(.+)$/m)?.[1]?.trim();
-  if (!outputPath || !fs.existsSync(outputPath)) throw new Error("分表核心未返回有效的等级成绩图片数据");
-  const buffer = fs.readFileSync(outputPath);
-  try { fs.unlinkSync(outputPath); } catch {}
-  return { name: path.basename(outputPath), buffer, meta };
-}
-
 function helpText() {
   return [
     "**Takase Bot 功能清单**",
@@ -760,6 +353,8 @@ function helpText() {
     "`/unbind`　删除本机保存的账号绑定",
     "",
     "别名命令：/aliasadd 添加别名（所有成员）；/aliasdelete 删除别名（仅管理员）；/aliases 查看某首歌全部别名；/whatis 按别名反查。查询无需绑定。",
+    "`/allowquery`　允许群友查询你的成绩；`/denyquery`　关掉（默认关着）。两条只对你自己可见。",
+    "直接 `@我` 用大白话提问也行，例如「帮我查一下 id870 的全难度成绩」「14.2 打 1000737 能有多少 rating」。",
     "首次使用请先执行 `/bind`。账号表单和结果只对你可见；请勿把邮箱、密码或 Bot Token 发到频道。",
   ].join("\n");
 }
@@ -795,9 +390,17 @@ function assertAllowedInteraction(interaction, config) {
 }
 
 async function selftest() {
-  if (COMMANDS.length !== 15) throw new Error("指令数量自测失败");
+  if (COMMANDS.length !== 17) throw new Error("指令数量自测失败");
+  const capabilityNames = CAPABILITY_SPECS.map((spec) => spec.name).join(",");
+  if (capabilityNames !== "help,chart,plate,song,chartinfo,constant,level,calculate") {
+    throw new Error("能力清单自测失败：" + capabilityNames);
+  }
+  configureCapabilities({ helpText: helpText() });
+  if ((await resolveCapability({}, "u", "help", "")).text !== helpText()) throw new Error("能力帮助文案自测失败");
+  // 未知能力名不该穿透到取数逻辑（模型偶尔会编工具名）
+  if ((await resolveCapability({}, "u", "全部成绩", "")).kind !== "notice") throw new Error("未知能力处理自测失败");
   const names = COMMANDS.map((item) => item.name).join(",");
-  if (names !== "constant,help,bind,chart,plate,song,chartinfo,level,calculate,status,unbind,aliasadd,aliasdelete,aliases,whatis") throw new Error("指令定义自测失败：" + names);
+  if (names !== "constant,help,bind,chart,plate,song,chartinfo,level,calculate,status,unbind,aliasadd,aliasdelete,aliases,whatis,allowquery,denyquery") throw new Error("指令定义自测失败：" + names);
   const plateCommand = COMMANDS.find((item) => item.name === "plate");
   const plateValues = plateCommand?.options?.[0]?.choices?.map((item) => item.value) || [];
   if (PLATE_CHOICES.length !== 11 || plateValues.join(",") !== PLATE_CHOICES.map((item) => item.id).join(",")) {
@@ -873,9 +476,9 @@ async function selftest() {
   if (autocompleteResponse.length) throw Error("自动补全频道限制失败");
 
   const aliasTestDir = fs.mkdtempSync(path.join(os.tmpdir(), "takase-alias-integration-"));
-  const originalAliases = songAliases;
+  const originalAliases = getAliasStore();
   try {
-    songAliases = new SongAliasStore(path.join(aliasTestDir, "aliases.json"), normalizeSongQuery);
+    setAliasStore(new SongAliasStore(path.join(aliasTestDir, "aliases.json"), normalizeSongQuery));
     const replies = [];
     const deferredReplies = [];
     const interaction = (commandName, values, admin = false) => ({
@@ -888,11 +491,11 @@ async function selftest() {
         COMMANDS.find(c => c.name === "aliasdelete").default_member_permissions !== String(PermissionFlagsBits.Administrator)) throw Error("别名命令默认权限失败");
     await handleAliasCommand(interaction("aliasadd", {query:"viyella",alias:"測試愛稱"},true));
     const ambiguousAdd = replies.pop();
-    if (songAliases.entries.length || !ambiguousAdd.content.includes("多首") || ambiguousAdd.flags) throw Error("添加别名公开候选失败");
+    if (getAliasStore().entries.length || !ambiguousAdd.content.includes("多首") || ambiguousAdd.flags) throw Error("添加别名公开候选失败");
     await handleAliasCommand(interaction("aliasadd", {query:"viiibit exp",alias:"測試愛稱"}));
-    if (songAliases.entries.length !== 1 || !replies.pop().content.includes("已添加")) throw Error("添加别名失败");
+    if (getAliasStore().entries.length !== 1 || !replies.pop().content.includes("已添加")) throw Error("添加别名失败");
     await handleAliasCommand(interaction("aliasadd", {query:"id870",alias:"测试爱称"},true));
-    if (songAliases.entries.length !== 1 || !replies.pop().content.includes("已有")) throw Error("重复别名处理失败");
+    if (getAliasStore().entries.length !== 1 || !replies.pop().content.includes("已有")) throw Error("重复别名处理失败");
     if (searchSongs("测试爱称")[0]?.id !== 870 || searchSongs("测试爱")[0]?.id !== 870 ||
         songAutocomplete("song","测试爱称")[0]?.value !== "id870" ||
         songAutocomplete("chartinfo","测试爱称 紫譜")[0]?.value !== "id870 master" ||
@@ -921,12 +524,12 @@ async function selftest() {
       if (!autocompleteResponse.some(c => c.value === (commandName === "chartinfo" ? "id870 master" : "id870"))) throw Error("歌曲输入模糊补全失败：" + commandName);
     }
     if (deferredReplies.filter(r=>r.commandName === "aliasadd").some(r=>r.flags)) throw Error("添加别名结果应公开");
-    const file = songAliases.filePath;
-    songAliases = new SongAliasStore(file,normalizeSongQuery);
-    songAliases.load();
+    const file = getAliasStore().filePath;
+    setAliasStore(new SongAliasStore(file,normalizeSongQuery));
+    getAliasStore().load();
     if (searchSongs("测试爱称").length !== 2) throw Error("重载别名搜索失败");
     await handleAliasCommand(interaction("aliasdelete", {query:"id870",alias:"测试爱称"}));
-    if (!replies.pop().content.includes("管理员") || !songAliases.matches(870,normalizeSongQuery("测试爱称"),true)) throw Error("删除别名权限失败");
+    if (!replies.pop().content.includes("管理员") || !getAliasStore().matches(870,normalizeSongQuery("测试爱称"),true)) throw Error("删除别名权限失败");
     await handleAliasCommand(interaction("aliasdelete", {query:"测试爱称",alias:"测试爱称"},true));
     if (!replies.pop().content.includes("多首")) throw Error("删除目标歧义处理失败");
     await handleAutocomplete({ ...mockAutocomplete, commandName:"aliasdelete", memberPermissions:{has:()=>true}, options:{getFocused:()=>({name:"alias",value:"测试爱"}),getString:()=>"id870"} },autocompleteConfig);
@@ -934,17 +537,17 @@ async function selftest() {
     await handleAliasCommand(interaction("aliasdelete", {query:"id870",alias:"测试爱称"},true));
     if (!replies.pop().content.includes("已删除") || searchSongs("测试爱称").length !== 1 || searchSongs("测试爱称")[0].id !== 168) throw Error("删除应只影响指定曲目");
     if (songAutocomplete("song","测试爱称").some(c=>c.value === "id870")) throw Error("删除后补全未刷新");
-    songAliases.load();
-    if (songAliases.matches(870,normalizeSongQuery("测试爱称"),true)) throw Error("删除未持久化");
+    getAliasStore().load();
+    if (getAliasStore().matches(870,normalizeSongQuery("测试爱称"),true)) throw Error("删除未持久化");
     await handleAliasCommand(interaction("aliasdelete", {query:"id870",alias:"测试爱称"},true));
     if (!replies.pop().content.includes("没有该别名")) throw Error("不存在的别名删除失败");
-    for (let i=0;i<35;i++) songAliases.add(870,"长别名" + i + "字".repeat(70),"test-user");
+    for (let i=0;i<35;i++) getAliasStore().add(870,"长别名" + i + "字".repeat(70),"test-user");
     replies.length = 0;
     await handleAliasCommand(interaction("aliases",{query:"id870"}));
     if (replies.length < 2 || replies.some(reply => reply.content.length > 2000 || reply.allowedMentions.parse.length)) throw Error("别名分页或提及限制失败");
     if (aliasAutocomplete("").length !== 25) throw Error("别名候选上限失败");
   } finally {
-    songAliases = originalAliases;
+    setAliasStore(originalAliases);
     for (const entry of fs.readdirSync(aliasTestDir)) fs.unlinkSync(path.join(aliasTestDir, entry));
     fs.rmdirSync(aliasTestDir);
   }
@@ -980,8 +583,11 @@ async function main() {
   validateConfig(config);
   fs.mkdirSync(config.workDir, { recursive: true });
   fs.mkdirSync(config.outputDir, { recursive: true });
-  songAliases = new SongAliasStore(path.join(path.dirname(config.vaultPath), "song-aliases-" + config.guildId + ".json"), normalizeSongQuery);
-  songAliases.load();
+  // 别名文件按 scope 命名；Discord 钉死为 guildId，文件名与抽取前逐字节一致。
+  configureAliases({ ...config, aliasScope: config.guildId });
+  // 能力提示的默认文案本来就是 Discord 写法（/bind、`id870 master`），
+  // 只有帮助清单要用本文件里那份 markdown 版。
+  configureCapabilities({ helpText: helpText() });
 
   let restAgent = null;
   if (config.proxyUrl) {
@@ -1002,9 +608,42 @@ async function main() {
     const root = config.rioChatDir || path.join(process.cwd(), "rio-chat");
     const rio = loadRioSettings(root);
     if (rio) {
-      rioChat = createRioChat(rio, config, { log: text => emit("BOT_LOG", text) });
-      client.on("messageCreate", message => { void rioChat.handle(message).catch(() => emit("BOT_ERROR", "梨绪聊天发送失败，请检查频道权限")); });
-      emit("BOT_LOG", "梨绪聊天已启用：指定频道@回复，表情按语境概率发送");
+      rioChat = createRioChat(rio, config, {
+        log: text => emit("BOT_LOG", text),
+        // 其余钩子（accepts/extractText/typing/send）留空，走 Discord 默认实现
+        adapter: {
+          actions: core.CAPABILITY_SPECS,
+          actionTarget: true,
+          personalRecommendationNotice: async message => {
+            const {bindingNotice}=await import('./rio-chat/personal-recommendation.cjs');
+            return bindingNotice(id=>core.getBinding(config,id),String(message.author.id),discordMentions(message).map(user=>String(user.id)),'请使用 /bind 绑定。');
+          },
+          // 频道里最近的消息 + 机器人自己的输出，帮模型接住指代
+          context: (message) => Array.isArray(message.__context) ? message.__context : [],
+          ability: (message) => {
+            const users = discordMentions(message);
+            const base = "运行时实际能力：你正在Discord中回复@消息。现在已经支持表情附件，由程序决定发送。用户想查成绩、查定数、算 Rating 时可以调用工具，结果和图片由程序发送。";
+            if (!users.length) return base;
+            return base + "\n本条消息 @ 了：" + users.map((user) => user.username + "（编号 " + user.id + "）").join("、") +
+              "。要查的是别人时，在 action 里加 \"target\":\"对方的编号\"；查自己、或没提到别人时不要加 target。";
+          },
+          runAction: (action, message, result) => {
+            // 只认本条消息真的 @ 过的人：模型给别的编号一律作废，退回查自己
+            const allowed = new Set(discordMentions(message).map((user) => user.id));
+            const target = action.target && allowed.has(String(action.target)) ? String(action.target) : null;
+            if (action.target && !target) emit("BOT_LOG", "忽略模型给的陌生查询对象：" + action.target);
+            return runChatAction(action, message, result?.text || "", target).then(() => ({ handled: true }));
+          },
+        },
+      });
+      client.on("messageCreate", message => {
+        // 上下文要在记录本条之前取，避免把用户这句话重复一遍
+        message.__context = channelContextText(message.channelId);
+        // 只记拿得到正文的（@ 机器人的、私聊的）；普通闲聊 Discord 不给正文
+        if (message.content) rememberChannelMessage(message.channelId, message.author?.username || message.author?.id, message.content);
+        void rioChat.handle(message).catch(() => emit("BOT_ERROR", "梨绪聊天发送失败，请检查频道权限"));
+      });
+      emit("BOT_LOG", "梨绪聊天已启用：指定频道@回复，表情按语境概率发送，可用自然语言查分");
     } else emit("BOT_LOG", "梨绪聊天未启用：请检查EXE同目录rio-chat/config.local.json");
   } catch { emit("BOT_ERROR", "梨绪聊天配置加载失败；请检查本地配置与资源文件，原有斜杠功能继续运行"); }
   const operationQueue = [];
@@ -1015,6 +654,113 @@ async function main() {
   let currentOperation = "空闲";
   let shuttingDown = false;
   const startedAt = Date.now();
+
+  // ── 频道上下文 ────────────────────────────────────────────────────
+  // 和 QQ 版同一个思路：@ 机器人之前频道里发生过什么，一起交给模型，
+  // 「这个人是谁」「刚才那张图」才接得上。Discord 这边有个平台硬限制：
+  // 没开 Message Content intent，只有 @ 了机器人（或私聊）的消息才拿得到正文，
+  // 所以上下文里主要是「@ 机器人的提问」和「机器人自己的输出」。
+  const channelContext = new Map();        // channelId -> [{at, who, text}]
+  const CONTEXT_MESSAGES = 12;
+  const CONTEXT_TTL_MS = 10 * 60 * 1000;
+  const CONTEXT_MAX_CHARS = 900;
+
+  function rememberChannelMessage(channelId, who, text) {
+    if (!channelId) return;
+    const line = String(text || "").replace(/\s+/g, " ").trim().slice(0, 160);
+    if (!line) return;
+    const list = channelContext.get(String(channelId)) || [];
+    list.push({ at: Date.now(), who: String(who || "?").slice(0, 32), text: line });
+    while (list.length > CONTEXT_MESSAGES) list.shift();
+    channelContext.set(String(channelId), list);
+  }
+
+  function channelContextText(channelId, skipLast = 0) {
+    const list = (channelContext.get(String(channelId)) || [])
+      .filter((item) => Date.now() - item.at < CONTEXT_TTL_MS)
+      .slice(0, skipLast ? -skipLast : undefined);
+    const lines = [];
+    let total = 0;
+    for (const item of list.slice().reverse()) {
+      const line = new Date(item.at).toTimeString().slice(0, 5) + " " + item.who + "：" + item.text;
+      if (total + line.length > CONTEXT_MAX_CHARS) break;
+      total += line.length;
+      lines.unshift(line);
+    }
+    return lines;
+  }
+
+  // 出图后记一笔：说明 + 生成它用的数据摘要。图本身聊天模型读不到，
+  // 但这些数字读得到，所以「他这首歌打多少分」答得上。
+  function rememberBotImage(channelId, kind, image, caption) {
+    rememberChannelMessage(channelId, "梨绪", core.describeImage(kind, image, caption) + "（图片）");
+  }
+
+  // 聊天里的工具调用：和斜杠命令共用同一套解析（takase-core.resolveCapability）、
+  // 队列与冷却，只是结果回复到那条 @ 消息上，不再经过 interaction。
+  function startChatImageJob(message, kind, label, generate) {
+    const userKey = kind + ":" + message.author.id;
+    if (queuedUsers.has(userKey)) return { started: false, reason: "你手上还有一张同类的图在排队呢，等它出来再说。" };
+    const remaining = GENERATE_COOLDOWN_MS - (Date.now() - (lastGenerateAt.get(userKey) || 0));
+    if (remaining > 0) return { started: false, reason: "刚才已经生成过一张啦，等 " + Math.ceil(remaining / 1000) + " 秒再叫我。" };
+    const ahead = queuePosition();
+    queuedUsers.add(userKey);
+    lastGenerateAt.set(userKey, Date.now());
+    let settle;
+    const done = new Promise((resolve) => { settle = resolve; });
+    const accepted = enqueue({
+      userKey, label,
+      run: async () => {
+        try { settle({ ok: true, image: await generate() }); }
+        catch (error) { settle({ ok: false, reason: safeError(error) }); }
+      },
+    });
+    if (!accepted) {
+      queuedUsers.delete(userKey);
+      return { started: false, reason: "当前队列已满，请稍后再试。" };
+    }
+    return { started: true, ahead, done };
+  }
+
+  // 本条消息 @ 到的人（排除机器人自己）。「帮我查一下 @某某 的成绩」靠它指认对象。
+  function discordMentions(message) {
+    const users = message.mentions?.users;
+    if (!users) return [];
+    return [...users.values()].filter((user) => !user.bot && user.id !== message.client?.user?.id);
+  }
+
+  async function runChatAction(action, message, chatLine, target) {
+    const reply = (content) => {
+      rememberChannelMessage(message.channelId, "梨绪", content);   // 机器人说过的话也算上下文
+      return message.reply({ content, allowedMentions: { parse: [], repliedUser: false } });
+    };
+    const plan = await core.resolveCapability(config, message.author.id, action.name, action.query, (line) => emit("BOT_LOG", safeError(line)), target);
+    const lead = chatLine ? chatLine + "\n" : "";
+    // Discord 没有「提醒走私聊」那套引导，notice 就当普通文本回在频道里
+    // （失败时同样不把模型那句话带上，免得先说“这就去查”再报没绑定）
+    if (plan.kind === "notice") return reply(plan.text);
+    if (plan.kind === "text") return reply(lead + plan.text);
+    if (plan.kind === "lines") {
+      for (const chunk of splitDiscordLines(lead + plan.header, plan.lines, plan.footer)) await reply(chunk);
+      return;
+    }
+    if (plan.kind !== "image") throw new Error("未知的能力结果类型：" + plan.kind);
+    const job = startChatImageJob(message, plan.key, plan.label, plan.run);
+    if (!job.started) return reply(job.reason);
+    if (chatLine) await reply(chatLine);
+    const done = await job.done;
+    if (!done.ok) return reply(plan.failText + done.reason);
+    const limit = 10 * 1024 * 1024;
+    if (done.image.buffer.length > limit) {
+      return reply(plan.failText + "生成图片为 " + (done.image.buffer.length / 1048576).toFixed(1) + " MiB，超过频道附件上限");
+    }
+    rememberBotImage(message.channelId, plan.key, done.image, plan.caption);
+    return message.reply({
+      content: plan.caption,
+      allowedMentions: { parse: [], repliedUser: false },
+      files: [{ attachment: done.image.buffer, name: done.image.name }],
+    });
+  }
 
   function isDuplicate(interactionId) {
     const now = Date.now();
@@ -1100,20 +846,42 @@ async function main() {
     else await interaction.editReply("正在登录并验证账号，请稍候……");
   }
 
-  async function handleChart(interaction) {
-    const binding = await getBinding(config, interaction.user.id);
-    if (!binding) {
-      await interaction.reply({ content: "你还没有绑定大饼账号。请先执行 `/bind`。", flags: MessageFlags.Ephemeral });
-      return;
+  // 决定这次查谁的账号，并做授权校验。返回 binding；返回 null 表示已经回复过错误。
+  // 规则和聊天路径完全一致：查别人要对方自己开放过，且只能查真的选出来的人。
+  async function resolveTargetBinding(interaction) {
+    const targetUser = interaction.options.getUser?.("user") || null;
+    const selfId = interaction.user.id;
+    if (targetUser && targetUser.id !== selfId) {
+      const target = await getBinding(config, targetUser.id);
+      if (!target) {
+        await interaction.reply({ content: capabilityHint("targetNotBound"), flags: MessageFlags.Ephemeral });
+        return null;
+      }
+      if (target.allowOthers !== true) {
+        await interaction.reply({ content: capabilityHint("targetNotAllowed"), flags: MessageFlags.Ephemeral });
+        return null;
+      }
+      return target;
     }
+    const binding = await getBinding(config, selfId);
+    if (!binding) {
+      await interaction.reply({ content: capabilityHint("bindNotice"), flags: MessageFlags.Ephemeral });
+      return null;
+    }
+    return binding;
+  }
+
+  async function handleChart(interaction) {
+    const binding = await resolveTargetBinding(interaction);
+    if (!binding) return;
     const userKey = "chart:" + interaction.user.id;
     if (queuedUsers.has(userKey)) {
-      await interaction.reply({ content: "你已经有一项分表任务正在生成或排队，请勿重复提交。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "你手上还有一张同类的图在排队呢，等它出来再说。", flags: MessageFlags.Ephemeral });
       return;
     }
     const remaining = GENERATE_COOLDOWN_MS - (Date.now() - (lastGenerateAt.get(userKey) || 0));
     if (remaining > 0) {
-      await interaction.reply({ content: "生成冷却中，请在 " + Math.ceil(remaining / 1000) + " 秒后再试。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "刚才已经生成过一张啦，等 " + Math.ceil(remaining / 1000) + " 秒再叫我。", flags: MessageFlags.Ephemeral });
       return;
     }
     const ahead = queuePosition();
@@ -1135,6 +903,7 @@ async function main() {
             content: "**" + (binding.playerName || "玩家") + "** 的 B50 + N10 + P50 分表",
             files: [{ attachment: image.buffer, name: image.name }],
           });
+          rememberBotImage(interaction.channelId, "chart", image, (binding.playerName || "玩家") + " 的 B50 + N10 + P50 分表");
           emit("BOT_LOG", "分表图片发送完成");
         } catch (error) {
           try { await interaction.editReply("分表生成失败：" + safeError(error)); } catch {}
@@ -1144,7 +913,7 @@ async function main() {
     });
     if (!accepted) {
       queuedUsers.delete(userKey);
-      await interaction.editReply("当前队列已满，请稍后再试。 ");
+      await interaction.editReply("我这边排队的活儿太多了，等会儿再试。");
       return;
     }
     await interaction.editReply(ahead === 0 ? "已收到，正在生成分表，请稍候……" : "已加入生成队列，前面还有 " + ahead + " 项任务。 ");
@@ -1157,19 +926,16 @@ async function main() {
       await interaction.reply({ content: "不支持的牌子选项，请重新执行 `/plate`。", flags: MessageFlags.Ephemeral });
       return;
     }
-    const binding = await getBinding(config, interaction.user.id);
-    if (!binding) {
-      await interaction.reply({ content: "你还没有绑定大饼账号。请先执行 `/bind`。", flags: MessageFlags.Ephemeral });
-      return;
-    }
+    const binding = await resolveTargetBinding(interaction);
+    if (!binding) return;
     const userKey = "plate:" + interaction.user.id;
     if (queuedUsers.has(userKey)) {
-      await interaction.reply({ content: "你已经有一项牌子完成度任务正在生成或排队，请勿重复提交。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "你手上还有一张同类的图在排队呢，等它出来再说。", flags: MessageFlags.Ephemeral });
       return;
     }
     const remaining = GENERATE_COOLDOWN_MS - (Date.now() - (lastGenerateAt.get(userKey) || 0));
     if (remaining > 0) {
-      await interaction.reply({ content: "生成冷却中，请在 " + Math.ceil(remaining / 1000) + " 秒后再试。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "刚才已经生成过一张啦，等 " + Math.ceil(remaining / 1000) + " 秒再叫我。", flags: MessageFlags.Ephemeral });
       return;
     }
     const ahead = queuePosition();
@@ -1195,6 +961,7 @@ async function main() {
             content: "**" + escapeDiscordText(binding.playerName || "玩家") + "** 的 **" + plate.nameJa + "（" + plate.nameZhHans + "）** 完成度\n" + escapeDiscordText(plate.version) + progress,
             files: [{ attachment: image.buffer, name: image.name }],
           });
+          rememberBotImage(interaction.channelId, "plate", image, (binding.playerName || "玩家") + " 的 " + plate.nameJa + " 完成度");
           emit("BOT_LOG", "牌子完成度图片发送完成");
         } catch (error) {
           try { await interaction.editReply("牌子完成度图生成失败：" + safeError(error)); } catch {}
@@ -1204,7 +971,7 @@ async function main() {
     });
     if (!accepted) {
       queuedUsers.delete(userKey);
-      await interaction.editReply("当前队列已满，请稍后再试。 ");
+      await interaction.editReply("我这边排队的活儿太多了，等会儿再试。");
       return;
     }
     const target = "**" + plate.nameJa + "（" + plate.nameZhHans + "）** / " + plate.version;
@@ -1237,19 +1004,16 @@ async function main() {
     }
 
     const song = matches[0];
-    const binding = await getBinding(config, interaction.user.id);
-    if (!binding) {
-      await interaction.reply({ content: "你还没有绑定大饼账号。请先执行 `/bind`。", flags: MessageFlags.Ephemeral });
-      return;
-    }
+    const binding = await resolveTargetBinding(interaction);
+    if (!binding) return;
     const userKey = "song:" + interaction.user.id;
     if (queuedUsers.has(userKey)) {
-      await interaction.reply({ content: "你已经有一项单曲成绩图正在生成或排队，请勿重复提交。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "你手上还有一张同类的图在排队呢，等它出来再说。", flags: MessageFlags.Ephemeral });
       return;
     }
     const remaining = GENERATE_COOLDOWN_MS - (Date.now() - (lastGenerateAt.get(userKey) || 0));
     if (remaining > 0) {
-      await interaction.reply({ content: "生成冷却中，请在 " + Math.ceil(remaining / 1000) + " 秒后再试。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "刚才已经生成过一张啦，等 " + Math.ceil(remaining / 1000) + " 秒再叫我。", flags: MessageFlags.Ephemeral });
       return;
     }
     const ahead = queuePosition();
@@ -1271,6 +1035,7 @@ async function main() {
             content: "**" + escapeDiscordText(binding.playerName || "玩家") + "** 的单曲全难度成绩：`id" + song.id + "` " + escapeDiscordText(song.name),
             files: [{ attachment: image.buffer, name: image.name }],
           });
+          rememberBotImage(interaction.channelId, "song", image, (binding.playerName || "玩家") + " 的单曲成绩：id" + song.id + " " + song.name);
           emit("BOT_LOG", "单曲成绩图发送完成");
         } catch (error) {
           try { await interaction.editReply("单曲成绩图生成失败：" + safeError(error)); } catch {}
@@ -1280,7 +1045,7 @@ async function main() {
     });
     if (!accepted) {
       queuedUsers.delete(userKey);
-      await interaction.editReply("当前队列已满，请稍后再试。 ");
+      await interaction.editReply("我这边排队的活儿太多了，等会儿再试。");
       return;
     }
     const target = "`id" + song.id + "` " + escapeDiscordText(song.name);
@@ -1320,12 +1085,12 @@ async function main() {
     const match = result.matches[0];
     const userKey = "chartinfo:" + interaction.user.id;
     if (queuedUsers.has(userKey)) {
-      await interaction.reply({ content: "你已经有一项谱面分析图正在生成或排队，请勿重复提交。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "你手上还有一张同类的图在排队呢，等它出来再说。", flags: MessageFlags.Ephemeral });
       return;
     }
     const remaining = GENERATE_COOLDOWN_MS - (Date.now() - (lastGenerateAt.get(userKey) || 0));
     if (remaining > 0) {
-      await interaction.reply({ content: "生成冷却中，请在 " + Math.ceil(remaining / 1000) + " 秒后再试。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "刚才已经生成过一张啦，等 " + Math.ceil(remaining / 1000) + " 秒再叫我。", flags: MessageFlags.Ephemeral });
       return;
     }
     const ahead = queuePosition();
@@ -1347,6 +1112,7 @@ async function main() {
             content: "谱面分析：`id" + match.song.id + "` **" + escapeDiscordText(match.song.name) + " · " + match.difficultyName + "**",
             files: [{ attachment: image.buffer, name: image.name }],
           });
+          rememberBotImage(interaction.channelId, "chartinfo", image, "谱面分析：id" + match.song.id + " " + match.song.name + " · " + match.difficultyName);
           emit("BOT_LOG", "谱面分析图发送完成");
         } catch (error) {
           try { await interaction.editReply("谱面分析图生成失败：" + safeError(error)); } catch {}
@@ -1356,7 +1122,7 @@ async function main() {
     });
     if (!accepted) {
       queuedUsers.delete(userKey);
-      await interaction.editReply("当前队列已满，请稍后再试。 ");
+      await interaction.editReply("我这边排队的活儿太多了，等会儿再试。");
       return;
     }
     const target = "`id" + match.song.id + "` " + escapeDiscordText(match.song.name) + " · " + match.difficultyName;
@@ -1369,9 +1135,9 @@ async function main() {
     const query=interaction.options.getString('query',true).trim();
     if(!/^(?:[0-9]|1[0-9]|20)(?:\.[0-9])?$/.test(query) || Number(query)>20) return interaction.reply({content:'请输入 0–20 的整数或一位小数，例如 14、14.2。',flags:MessageFlags.Ephemeral});
     const userKey='constant:'+interaction.user.id;
-    if(queuedUsers.has(userKey)) return interaction.reply({content:'你的定数表正在生成或排队。',flags:MessageFlags.Ephemeral});
+    if(queuedUsers.has(userKey)) return interaction.reply({content:'你手上还有一张同类的图在排队呢，等它出来再说。',flags:MessageFlags.Ephemeral});
     const remaining=GENERATE_COOLDOWN_MS-(Date.now()-(lastGenerateAt.get(userKey)||0));
-    if(remaining>0) return interaction.reply({content:'请在 '+Math.ceil(remaining/1000)+' 秒后重试。',flags:MessageFlags.Ephemeral});
+    if(remaining>0) return interaction.reply({content:'刚才已经生成过一张啦，等 '+Math.ceil(remaining/1000)+' 秒再叫我。',flags:MessageFlags.Ephemeral});
     await interaction.deferReply();
     queuedUsers.add(userKey);
     const accepted=enqueue({userKey,label:'正在生成定数表 '+query,run:async()=>{
@@ -1382,9 +1148,10 @@ async function main() {
         const buffer=Buffer.from(match[2],'base64');
         if(buffer.length>Number(interaction.attachmentSizeLimit||10*1024*1024)) throw new Error('图片超过频道附件限制，请用小数定数缩小查询范围');
         await interaction.editReply({content:'音击定数表 · '+query,files:[{attachment:buffer,name:match[1]}]});
+        rememberChannelMessage(interaction.channelId, "梨绪", "音击定数表 · " + query + "（图片）");
       } catch(error) {await interaction.editReply('定数表生成失败：'+safeError(error));throw error;}
     }});
-    if(!accepted){queuedUsers.delete(userKey);await interaction.editReply('当前队列已满，请稍后重试。');}
+    if(!accepted){queuedUsers.delete(userKey);await interaction.editReply('我这边排队的活儿太多了，等会儿再试。');}
     else lastGenerateAt.set(userKey,Date.now());
   }
 
@@ -1396,19 +1163,16 @@ async function main() {
       return;
     }
     const target = levelCommandTarget(level);
-    const binding = await getBinding(config, interaction.user.id);
-    if (!binding) {
-      await interaction.reply({ content: "你还没有绑定大饼账号。请先执行 `/bind`。", flags: MessageFlags.Ephemeral });
-      return;
-    }
+    const binding = await resolveTargetBinding(interaction);
+    if (!binding) return;
     const userKey = "level:" + interaction.user.id;
     if (queuedUsers.has(userKey)) {
-      await interaction.reply({ content: "你已经有一项等级成绩图正在生成或排队，请勿重复提交。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "你手上还有一张同类的图在排队呢，等它出来再说。", flags: MessageFlags.Ephemeral });
       return;
     }
     const remaining = GENERATE_COOLDOWN_MS - (Date.now() - (lastGenerateAt.get(userKey) || 0));
     if (remaining > 0) {
-      await interaction.reply({ content: "生成冷却中，请在 " + Math.ceil(remaining / 1000) + " 秒后再试。", flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: "刚才已经生成过一张啦，等 " + Math.ceil(remaining / 1000) + " 秒再叫我。", flags: MessageFlags.Ephemeral });
       return;
     }
     const ahead = queuePosition();
@@ -1434,6 +1198,7 @@ async function main() {
             content: "**" + escapeDiscordText(binding.playerName || "玩家") + "** 的 **" + target + "** 全谱面成绩（" + escapeDiscordText(summary.sortDescription || "技术分降序") + "）" + progress,
             files: [{ attachment: image.buffer, name: image.name }],
           });
+          rememberBotImage(interaction.channelId, "level", image, (binding.playerName || "玩家") + " 的 " + target + " 成绩");
           emit("BOT_LOG", "等级成绩长图发送完成");
         } catch (error) {
           try { await interaction.editReply("等级成绩图生成失败：" + safeError(error)); } catch {}
@@ -1443,7 +1208,7 @@ async function main() {
     });
     if (!accepted) {
       queuedUsers.delete(userKey);
-      await interaction.editReply("当前队列已满，请稍后再试。 ");
+      await interaction.editReply("我这边排队的活儿太多了，等会儿再试。");
       return;
     }
     await interaction.editReply(ahead === 0
@@ -1482,6 +1247,22 @@ async function main() {
       await interaction.reply({ content: calculation.text });
       return;
     }
+    if (interaction.commandName === "allowquery" || interaction.commandName === "denyquery") {
+      const allowed = interaction.commandName === "allowquery";
+      const binding = await getBinding(config, interaction.user.id);
+      if (!binding) {
+        await interaction.reply({ content: "你还没绑定大饼账号呢。先执行 `/bind`，再回来设这个。", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await saveBinding(config, { ...binding, allowOthers: allowed });
+      await interaction.reply({
+        content: allowed
+          ? "好，开了。以后群友在这里 @我 查你的成绩，我会帮他们翻——想关掉随时执行 `/denyquery`。"
+          : "收到，关了。以后别人想查你的成绩，我一律回绝。",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
     if (interaction.commandName === "status") {
       const minutes = Math.max(0, Math.floor((Date.now() - startedAt) / 60000));
       await interaction.reply({
@@ -1492,14 +1273,14 @@ async function main() {
     if (interaction.commandName === "unbind") {
       const binding = await getBinding(config, interaction.user.id);
       if (!binding) {
-        await interaction.reply({ content: "你目前没有绑定大饼账号。", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "你还没绑定过大饼账号呢，没什么可解的。", flags: MessageFlags.Ephemeral });
         return;
       }
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("takase:unbind:" + interaction.user.id).setLabel("确认删除绑定").setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId("takase:cancel-unbind:" + interaction.user.id).setLabel("取消").setStyle(ButtonStyle.Secondary),
       );
-      await interaction.reply({ content: "确定删除本机加密保存的账号绑定吗？此操作无法恢复。", components: [row] });
+      await interaction.reply({ content: "确定删除吗？本机保存的账号绑定删了就找不回来了。", components: [row] });
     }
   }
 
@@ -1511,12 +1292,12 @@ async function main() {
       return interaction.reply({ content: "这个确认按钮不属于你。", flags: MessageFlags.Ephemeral });
     }
     if (parts[1] === "cancel-unbind") {
-      return interaction.update({ content: "已取消解绑。", components: [] });
+      return interaction.update({ content: "已取消，那就不删啦。", components: [] });
     }
     if (parts[1] === "unbind") {
       await vaultCall(config, "delete", [interaction.user.id]);
       emit("BOT_BINDING_COUNT", (await vaultCall(config, "count")).trim());
-      return interaction.update({ content: "已删除你绑定的大饼账号。下次使用请重新执行 `/bind`。", components: [] });
+      return interaction.update({ content: "账号已经删掉了。以后想用，再执行 `/bind` 就行。", components: [] });
     }
   }
 
@@ -1579,4 +1360,3 @@ main().catch((error) => {
   emit("BOT_FATAL", safeError(error));
   process.exitCode = 1;
 });
-

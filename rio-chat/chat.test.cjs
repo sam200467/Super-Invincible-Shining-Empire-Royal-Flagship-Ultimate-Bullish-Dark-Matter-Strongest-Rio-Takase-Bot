@@ -1,7 +1,7 @@
 "use strict";
 const test=require("node:test"), assert=require("node:assert/strict");
 const fs=require("node:fs"),path=require("node:path");
-const {createChat,chooseImage,failureReason,discomfort,requestReply,normalizeAction}=require("./chat.cjs");
+const {createChat,chooseImage,failureReason,discomfort,requestReply,normalizeAction,researchNotices}=require("./chat.cjs");
 // persona.md, examples.json and expressions.json are deployment content and are not
 // shipped with this repository. Without them the suite cannot run, so skip it on a
 // fresh clone rather than failing the build.
@@ -16,7 +16,10 @@ function settings(){
  return {c,manifest,persona:fs.readFileSync(path.join(__dirname,"persona.md"),"utf8"),examples:JSON.parse(fs.readFileSync(path.join(__dirname,"examples.json"))).examples};
 }
 const result={text:"哼哼，找我就对了！今天想聊什么？尽管说吧！",emotion:"neutral",scene:"ordinary",expressionIds:["small_smile"]};
-function mock(body=result){return async()=>({ok:true,json:async()=>({choices:[{finish_reason:"stop",message:{content:JSON.stringify(body)}}]})});}
+// 真实的 fetch 响应 text() 和 json() 都能用：chat.cjs 先读 text 再 JSON.parse，
+// 网关回 HTML 错误页时才截得出片段写进日志。
+const reply=data=>({ok:true,text:async()=>JSON.stringify(data),json:async()=>data});
+function mock(body=result){return async()=>reply({choices:[{finish_reason:"stop",message:{content:JSON.stringify(body)}}]});}
 let id=0;
 function msg(user="u",text="<@123> 你好",channel="c"){
  const replies=[];return {id:String(++id),content:text,guildId:"g",channelId:channel,author:{id:user,bot:false},client:{user:{id:"123"}},channel:{sendTyping:async()=>{},permissionsFor:()=>({has:()=>true})},replies,reply:async x=>{replies.push(x);return x;}};
@@ -32,6 +35,21 @@ test_("probabilities have no image cooldown or dedup",()=>{
  assert.ok(chooseImage({...result,scene:"explanation",expressionIds:["scarf_calm"]},s,false,()=>0.01));assert.equal(chooseImage(result,s,true,()=>0),null);
  assert.equal(chooseImage({...result,scene:"distress"},s,false,()=>0),null);
  assert.equal(chooseImage({...result,expressionIds:["../../secret","music_taunt"]},s,false,()=>0),null);
+});
+test_("few-shot samples carry real expression ids",async()=>{
+ // 示例是模型唯一的输出样例。全填 [] 它会学成永远返回空数组，chooseImage 拿不到候选就
+ // 直接 return null，配图概率调到多少都不会出图 —— 这条守住的是「模型愿意给 ID」。
+ const s=settings();let body;
+ const chat=createChat(s,host,{fetchImpl:async(u,o)=>{body=JSON.parse(o.body);return mock()()},random:()=>1});
+ await chat.handle(msg("s","<@123> 你好"));
+ const known=new Set(s.manifest.entries.map(e=>e.id));
+ const samples=body.messages.filter(m=>m.role==="assistant")
+   .map(m=>{try{return JSON.parse(m.content)}catch{return null}})
+   .filter(x=>x&&Array.isArray(x.expressionIds));
+ const withIds=samples.filter(x=>x.expressionIds.length);
+ assert.ok(withIds.length>=3,"示例里必须有多条带表情候选，否则模型学到的永远是空数组");
+ for(const x of withIds)for(const id of x.expressionIds)assert.ok(known.has(id),"示例引用了清单外的表情ID："+id);
+ chat.close();
 });
 test_("message authorization, direct mention and dedup",async()=>{
  let calls=0;const chat=createChat(settings(),host,{fetchImpl:async(...a)=>{calls++;return mock()(...a)},random:()=>0});
@@ -114,11 +132,12 @@ test_("failure log names the cause and never prints the key",async()=>{
  assert.equal(failureReason(Error("DeepSeek返回格式无效：\"\""),undefined),"DeepSeek返回格式无效：\"\"");
 });
 test_("prefill prevents blank replies, a blank retries once then degrades",async()=>{
- const s=settings();const requests=[];
- const blank={ok:true,json:async()=>({choices:[{finish_reason:"stop",message:{content:" ".repeat(43)}}]})};
- const chat=createChat(s,host,{fetchImpl:async(u,o)=>{requests.push(JSON.parse(o.body));return requests.length===1?blank:await mock()()}});
+ const s=settings();const requests=[],logs=[];
+ const blank=reply({choices:[{finish_reason:"stop",message:{content:" ".repeat(43)}}]});
+ const chat=createChat(s,host,{log:t=>logs.push(t),fetchImpl:async(u,o)=>{requests.push(JSON.parse(o.body));return requests.length===1?blank:await mock()()}});
  const m=msg("a","<@123> 你很擅长音击吗");await chat.handle(m);
  assert.equal(requests.length,2);
+ assert.ok(logs.some(t=>t.includes("空白回复后重画成功")),"模型空白和网关故障要在日志里分得开");
  assert.deepEqual(requests[0].messages.at(-1),{role:"assistant",content:"{"});
  assert.ok(m.replies[0].content.includes("哼哼"));
  let blanks=0;const chat2=createChat(s,host,{log:()=>{},fetchImpl:async()=>{blanks++;return blank}});
@@ -129,10 +148,10 @@ test_("prefill prevents blank replies, a blank retries once then degrades",async
 });
 test_("two blank JSON replies degrade to a plain-text answer",async()=>{
  const s=settings();const bodies=[],logs=[];
- const blank={ok:true,json:async()=>({choices:[{finish_reason:"stop",message:{content:" ".repeat(43)}}]})};
+ const blank=reply({choices:[{finish_reason:"stop",message:{content:" ".repeat(43)}}]});
  const chat=createChat(s,host,{log:t=>logs.push(t),random:()=>0,fetchImpl:async(u,o)=>{
    bodies.push(JSON.parse(o.body));
-   return bodies.length<=2?blank:{ok:true,json:async()=>({choices:[{finish_reason:"stop",message:{content:"那次是我状态不好，下次一定赢回来。"}}]})};
+   return bodies.length<=2?blank:reply({choices:[{finish_reason:"stop",message:{content:"那次是我状态不好，下次一定赢回来。"}}]});
  }});
  const m=msg("a","<@123> 你到底行不行");await chat.handle(m);
  assert.equal(bodies.length,3);
@@ -142,9 +161,62 @@ test_("two blank JSON replies degrade to a plain-text answer",async()=>{
  assert.ok(logs.some(t=>t.includes("已降级为纯文本")));
  chat.close();
 });
+test_("gateway responses that are not JSON retry once, configuration errors do not",async()=>{
+ const s=settings();let calls=0;
+ const r=await requestReply(s,[{role:"user",content:"hi"}],{fetchImpl:async()=>{
+  calls++;
+  return calls===1?{ok:true,text:async()=>"<html><body>502 Bad Gateway</body></html>"}:await mock()();
+ }});
+ assert.equal(calls,2);assert.equal(r.text,result.text);
+ assert.equal(r.retried,true,"重试过就要在结果里留痕，日志才看得出代理链路不稳");
+ // 200 但不是 JSON、或者没有 choices（网关错误页）都算传输故障
+ let gateway=0;
+ await assert.rejects(requestReply(s,[{role:"user",content:"hi"}],{fetchImpl:async()=>{gateway++;return {ok:true,text:async()=>JSON.stringify({error:"bad gateway"})}}}),/缺少choices/);
+ assert.equal(gateway,2);
+ // 401 是鉴权/余额这类配置问题，重试没有意义
+ let auth=0;
+ await assert.rejects(requestReply(s,[{role:"user",content:"hi"}],{fetchImpl:async()=>{auth++;return {ok:false,status:401,text:async()=>"unauthorized"}}}),/HTTP 401/);
+ assert.equal(auth,1);
+ // 超时/取消说明预算已经用完，不该再撞一次
+ let aborts=0;const aborted=Error("This operation was aborted");aborted.name="AbortError";
+ await assert.rejects(requestReply(s,[{role:"user",content:"hi"}],{fetchImpl:async()=>{aborts++;throw aborted}}),/aborted/);
+ assert.equal(aborts,1);
+ // 日志要带上响应片段，否则分不清是网关 HTML 还是 body 被截断
+ const logs=[];
+ const chat=createChat(s,host,{log:t=>logs.push(t),fetchImpl:async()=>({ok:true,text:async()=>"<html>502 Bad Gateway</html>"})});
+ await chat.handle(msg());chat.close();
+ assert.ok(logs.some(t=>t.includes("不是JSON")&&t.includes("<html>502 Bad Gateway</html>")),logs.join("|"));
+});
+test_("research questions announce the lookup before the slow search",async()=>{
+ const s=settings();s.search={apiKey:"kimi-fixture",cache:new Map()};
+ const chat=createChat(s,host,{random:()=>0,
+  fetchImpl:async()=>reply({choices:[{finish_reason:"stop",message:{content:JSON.stringify({text:"查到了，按定数够线的谱面选。",scene:"explanation"})}}]}),
+  webFetchImpl:async()=>reply({search_results:[{title:"16000达成记录",url:"https://note.com/player/n/example",chunks:[{text:"正文"}]}]})});
+ const m=msg("a","<@123> 有没有舞萌上w6的吃分推荐？");await chat.handle(m);
+ assert.equal(m.replies.length,2,"先发提示，再发正式答复");
+ assert.ok(researchNotices.includes(m.replies[0].content),"提示要用人设口吻的现成文案");
+ assert.match(m.replies[1].content,/定数够线/);
+ assert.match(m.replies[1].content,/16000达成记录/);
+ assert.match(m.replies[1].content,/https:\/\/note\.com\/player\/n\/example/);
+ chat.close();
+});
+test_("灰区判定写进日志，漏没漏检索回看得到",async()=>{
+ const s=settings();s.search={apiKey:"kimi-fixture",cache:new Map()};
+ const logs=[];
+ const chat=createChat(s,host,{log:t=>logs.push(t),random:()=>0,
+  fetchImpl:async(u,o)=>{const b=JSON.parse(o.body);
+   return String(b.messages[0].content).startsWith("你在给一个音游")
+    ?reply({choices:[{finish_reason:"stop",message:{content:JSON.stringify({search:false,reason:"闲聊"})}}]})
+    :reply({choices:[{finish_reason:"stop",message:{content:JSON.stringify({text:"看你缺不缺这块分。",scene:"explanation"})}}]})}});
+ const m=msg("a","<@123> 这首值不值得练");await chat.handle(m);
+ assert.equal(m.replies.length,1);
+ assert.equal(m.replies[0].content,"看你缺不缺这块分。");
+ assert.ok(logs.some(t=>t.includes("分诊判不检索")),logs.join("|"));
+ chat.close();
+});
 test_("reply parses when the prefilled brace is not echoed back",async()=>{
  const s=settings();
- const r=await requestReply(s,[{role:"user",content:"hi"}],{fetchImpl:async()=>({ok:true,json:async()=>({choices:[{finish_reason:"stop",message:{content:JSON.stringify(result).slice(1)}}]})})});
+ const r=await requestReply(s,[{role:"user",content:"hi"}],{fetchImpl:async()=>reply({choices:[{finish_reason:"stop",message:{content:JSON.stringify(result).slice(1)}}]})});
  assert.equal(r.text,result.text);
 });
 // ── 工具调用（查分统一进来之后新增的那条契约）──────────────────────────

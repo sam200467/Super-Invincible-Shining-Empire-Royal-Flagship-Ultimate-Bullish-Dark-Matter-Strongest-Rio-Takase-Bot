@@ -43,6 +43,7 @@ class QqLaunchConfig {
     public int perGroupPerHour { get; set; }
     public int perUserPerHour { get; set; }
     public int dailyCap { get; set; }
+    public int duplicateWindowMs { get; set; }
     public int maxImageBytes { get; set; }
 }
 class QqButton : Button {
@@ -54,8 +55,8 @@ class TakaseQqForm : Form {
     string runtime,data,output,secrets,botCore,ongekiCore,vaultHelper,vault;
     TextBox txtNapCat,txtQq,txtGroups,txtToken,txtPort,txtProxy,txtLog;
     CheckBox chkReveal,chkAuto;
-    Label lblNapCatStatus,lblBotStatus,lblBindings;
-    QqButton btnStart,btnStop;
+    Label lblNapCatStatus,lblBotStatus,lblBindings,lblSearchStatus;
+    QqButton btnStart,btnStop,btnSearch;
     Process botProcess,napCatProcess;
     Timer qrTimer,napCatTimer; bool napCatConnected;
     NotifyIcon tray; ContextMenuStrip trayMenu; bool exitRequested,closing;
@@ -97,6 +98,12 @@ class TakaseQqForm : Form {
         lblBotStatus=LabelOf("Bot：未启动",18,116,true); lblBotStatus.AutoSize=false; lblBotStatus.AutoEllipsis=true; lblBotStatus.Size=new Size(844,20);
         lblBindings=LabelOf("已绑定用户：读取中",18,154);
         act.Controls.Add(lblNapCatStatus); act.Controls.Add(lblBotStatus); act.Controls.Add(lblBindings);
+        // 联网搜索要单独填一次本机 Key。入口必须摆在明面上 —— 藏在文档里的
+        // 命令行步骤等于没有这个功能，用户永远不会知道它存在。
+        lblSearchStatus=LabelOf("联网搜索：读取中",300,156,true);
+        btnSearch=ButtonOf("Kimi 搜索设置",620,148,180); btnSearch.Height=34;
+        act.Controls.Add(lblSearchStatus); act.Controls.Add(btnSearch);
+        btnSearch.Click+=delegate{OpenSearchSetup();};
         act.Resize+=delegate{LayoutLamps();};
         LayoutLamps();
         napCatTimer=new Timer { Interval=2000 }; napCatTimer.Tick+=delegate{RefreshNapCatLamp();}; napCatTimer.Start();
@@ -106,7 +113,9 @@ class TakaseQqForm : Form {
         int logHeight=Math.Max(110,note.Top-logTop-9);
         txtLog=new TextBox { Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BackColor=Color.FromArgb(27,31,38),ForeColor=Color.FromArgb(230,235,242),BorderStyle=BorderStyle.FixedSingle,Font=new Font("Microsoft YaHei UI",9.5F),Location=new Point(24,logTop),Size=new Size(872,logHeight),Anchor=AnchorStyles.Top|AnchorStyles.Bottom|AnchorStyles.Left|AnchorStyles.Right }; Controls.Add(txtLog);
         txtPort.Text="8790"; txtProxy.Text=DetectProxy(); Append("填写 NapCat 路径、机器人 QQ、允许群号和 OneBot Token 后即可启动。");
+        Append("想让它查曲库之外的攻略、手法、体感和手元视频，请点「Kimi 搜索设置」填入一次 API Key；不填只是不能联网搜索，查分和曲库不受影响。");
         ResumeLayout(false);
+        RefreshSearchStatus();
     }
     QqSettings ReadFields() { int port; if(!Int32.TryParse(txtPort.Text.Trim(),out port))port=0; return new QqSettings { NapCatLauncher=txtNapCat.Text.Trim(),QqNumber=txtQq.Text.Trim(),GroupIds=txtGroups.Text.Trim(),OneBotToken=txtToken.Text,OneBotPort=port,ProxyUrl=txtProxy.Text.Trim(),AutoStart=chkAuto.Checked }; }
     string[] Groups(string raw) { return raw.Split(new[]{',','，',';','；',' ','\r','\n','\t'},StringSplitOptions.RemoveEmptyEntries); }
@@ -121,7 +130,10 @@ class TakaseQqForm : Form {
     void WatchQrCode(string file,DateTime previous){if(qrTimer!=null){qrTimer.Stop();qrTimer.Dispose();}int attempts=0;qrTimer=new Timer();qrTimer.Interval=500;qrTimer.Tick+=delegate{attempts++;try{if(File.Exists(file)&&File.GetLastWriteTimeUtc(file)>previous&&new FileInfo(file).Length>0){qrTimer.Stop();ProcessStartInfo image=new ProcessStartInfo(file);image.UseShellExecute=true;Process.Start(image);Append("已用图片查看器打开 NapCat 登录二维码，请使用手机 QQ 扫码。");return;}}catch(Exception ex){qrTimer.Stop();Append("自动打开二维码失败："+ex.Message+"；请手动打开 "+file);return;}if(attempts>=180){qrTimer.Stop();Append("90 秒内没有生成新二维码；如果 QQ 已登录，这是正常现象。");}};qrTimer.Start();}
     int ListenerPid(int port){try{ProcessStartInfo i=new ProcessStartInfo("netstat","-ano -p tcp");i.UseShellExecute=false;i.CreateNoWindow=true;i.RedirectStandardOutput=true;using(Process p=Process.Start(i)){string all=p.StandardOutput.ReadToEnd();p.WaitForExit(3000);foreach(string raw in all.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries)){string line=raw.Trim();if(!line.StartsWith("TCP",StringComparison.OrdinalIgnoreCase)||line.IndexOf("LISTENING",StringComparison.OrdinalIgnoreCase)<0)continue;string[] parts=line.Split((char[])null,StringSplitOptions.RemoveEmptyEntries);if(parts.Length>=5&&parts[1].EndsWith(":"+port)) {int pid;if(Int32.TryParse(parts[parts.Length-1],out pid))return pid;}}}}catch{}return 0;}
     bool ClearOccupiedPort(int port){int pid=ListenerPid(port);if(pid==0)return true;string name="未知进程";try{name=Process.GetProcessById(pid).ProcessName;}catch{}DialogResult answer=MessageBox.Show("端口 "+port+" 已被 "+name+"（PID "+pid+"）占用。\n\n如果这是以前用 VBS 启动后遗留的旧 QQ Bot，可以由本程序结束它。是否结束该进程并继续？","发现旧 Bot 进程",MessageBoxButtons.YesNo,MessageBoxIcon.Warning);if(answer!=DialogResult.Yes){Append("启动已取消：端口 "+port+" 仍被 PID "+pid+" 占用。");return false;}try{Process old=Process.GetProcessById(pid);old.Kill();old.WaitForExit(3000);if(ListenerPid(port)!=0)throw new Exception("端口仍未释放");Append("已结束占用端口的旧进程（PID "+pid+"）。");return true;}catch(Exception ex){MessageBox.Show("无法结束占用端口的进程："+ex.Message,"启动失败",MessageBoxButtons.OK,MessageBoxIcon.Error);return false;}}
-    void StartBot(){if(botProcess!=null&&!botProcess.HasExited)return;QqSettings s=ReadFields();if(!Valid(s,true)||!SaveSettings(false)||!ClearOccupiedPort(s.OneBotPort))return;try{EnsureRuntime();QqLaunchConfig c=new QqLaunchConfig{napCatLauncher=s.NapCatLauncher,oneBotToken=s.OneBotToken,oneBotPort=s.OneBotPort,qqNumber=s.QqNumber,allowedGroupIds=Groups(s.GroupIds),proxyUrl=s.ProxyUrl,rioChatDir=Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","rio-chat")),workDir=data,outputDir=output,corePath=ongekiCore,vaultPath=vault,vaultHelperPath=vaultHelper,minSendIntervalMs=1200,jitterMs=300,perUserIntervalMs=2000,perGroupIntervalMs=3000,perGroupPerHour=20,perUserPerHour=30,dailyCap=1500,maxImageBytes=10485760};ProcessStartInfo p=new ProcessStartInfo(botCore,"--stdin-config");p.WorkingDirectory=runtime;p.UseShellExecute=false;p.CreateNoWindow=true;p.WindowStyle=ProcessWindowStyle.Hidden;p.RedirectStandardInput=true;p.RedirectStandardOutput=true;p.RedirectStandardError=true;p.StandardOutputEncoding=Encoding.UTF8;p.StandardErrorEncoding=Encoding.UTF8;botProcess=new Process();botProcess.StartInfo=p;botProcess.EnableRaisingEvents=true;botProcess.OutputDataReceived+=OnOutput;botProcess.ErrorDataReceived+=OnOutput;botProcess.Exited+=OnExited;botProcess.Start();botProcess.BeginOutputReadLine();botProcess.BeginErrorReadLine();byte[] bytes=Encoding.UTF8.GetBytes(json.Serialize(c));botProcess.StandardInput.BaseStream.Write(bytes,0,bytes.Length);botProcess.StandardInput.Close();BotStatus("等待 NapCat 连接……",Color.FromArgb(196,112,12));btnStart.Enabled=false;btnStop.Enabled=true;Append("QQ Bot 已启动，正在监听 OneBot 反向 WebSocket。");}catch(Exception ex){BotStatus("启动失败",Color.Firebrick);Append("启动失败："+ex.Message);}}
+    // 下面这串限流值才是本机实际生效的那份：GUI 用 --stdin-config 把参数直接喂给核心，
+    // 根本不读 qq-config.json（那个文件只对 启动QQBot.vbs 那条路有效）。两处要一起改，
+    // 否则从界面启动时用的还是老限额。放宽记录见 qq-config.json 的 _限流说明。
+    void StartBot(){if(botProcess!=null&&!botProcess.HasExited)return;QqSettings s=ReadFields();if(!Valid(s,true)||!SaveSettings(false)||!ClearOccupiedPort(s.OneBotPort))return;try{EnsureRuntime();QqLaunchConfig c=new QqLaunchConfig{napCatLauncher=s.NapCatLauncher,oneBotToken=s.OneBotToken,oneBotPort=s.OneBotPort,qqNumber=s.QqNumber,allowedGroupIds=Groups(s.GroupIds),proxyUrl=s.ProxyUrl,rioChatDir=RioChatDir(),workDir=data,outputDir=output,corePath=ongekiCore,vaultPath=vault,vaultHelperPath=vaultHelper,minSendIntervalMs=1000,jitterMs=200,perUserIntervalMs=800,perGroupIntervalMs=1000,perGroupPerHour=50,perUserPerHour=60,dailyCap=5000,duplicateWindowMs=15000,maxImageBytes=10485760};ProcessStartInfo p=new ProcessStartInfo(botCore,"--stdin-config");p.WorkingDirectory=runtime;p.UseShellExecute=false;p.CreateNoWindow=true;p.WindowStyle=ProcessWindowStyle.Hidden;p.RedirectStandardInput=true;p.RedirectStandardOutput=true;p.RedirectStandardError=true;p.StandardOutputEncoding=Encoding.UTF8;p.StandardErrorEncoding=Encoding.UTF8;botProcess=new Process();botProcess.StartInfo=p;botProcess.EnableRaisingEvents=true;botProcess.OutputDataReceived+=OnOutput;botProcess.ErrorDataReceived+=OnOutput;botProcess.Exited+=OnExited;botProcess.Start();botProcess.BeginOutputReadLine();botProcess.BeginErrorReadLine();byte[] bytes=Encoding.UTF8.GetBytes(json.Serialize(c));botProcess.StandardInput.BaseStream.Write(bytes,0,bytes.Length);botProcess.StandardInput.Close();BotStatus("等待 NapCat 连接……",Color.FromArgb(196,112,12));btnStart.Enabled=false;btnStop.Enabled=true;Append("QQ Bot 已启动，正在监听 OneBot 反向 WebSocket。");}catch(Exception ex){BotStatus("启动失败",Color.Firebrick);Append("启动失败："+ex.Message);}}
     void OnOutput(object s,DataReceivedEventArgs e){if(String.IsNullOrWhiteSpace(e.Data)||closing)return;try{BeginInvoke(new Action<string>(HandleLine),e.Data);}catch{}}
     void HandleLine(string line){if(line=="BOT_READY"){BotStatus("运行中",Color.FromArgb(22,135,72));return;}if(line.StartsWith("BOT_BINDING_COUNT:")){lblBindings.Text="已绑定用户："+line.Substring(18);return;}if(line.StartsWith("BOT_NAPCAT:")){napCatConnected=line.Substring(11)=="1";RefreshNapCatLamp();return;}if(line.StartsWith("BOT_BUSY:")){bool idle=line=="BOT_BUSY:0";BotStatus(idle?"运行中":line.Substring(9),idle?Color.FromArgb(22,135,72):Color.FromArgb(196,112,12));return;}if(line.StartsWith("BOT_FATAL:")){BotStatus("启动失败",Color.Firebrick);line="严重错误："+line.Substring(10);}else if(line.StartsWith("BOT_ERROR:"))line="错误："+line.Substring(10);else if(line.StartsWith("BOT_LOG:"))line=line.Substring(8);Append(line);}
     void OnExited(object s,EventArgs e){if(closing)return;try{BeginInvoke(new Action(delegate{BotStatus("已停止",Color.Gray);napCatConnected=false;RefreshNapCatLamp();btnStart.Enabled=true;btnStop.Enabled=false;Append("Bot 进程已结束。");}));}catch{}}
@@ -150,6 +162,56 @@ class TakaseQqForm : Form {
     // NapCat 的 Windows 包由 NapCatWinBootMain 启动、把钩子注入 QQ，它在跑就说明 NapCat 起着。
     // 单独开着 QQ 不算 —— 那时没有东西会去连 Bot。
     bool NapCatRunning(){try{return Process.GetProcessesByName("NapCatWinBootMain").Length>0;}catch{return false;}}
+    // ── 联网搜索（Kimi）设置 ──────────────────────────────────────────
+    // 这里算出的目录必须和 StartBot 传下去的 rioChatDir 完全一致，否则会出现
+    // 「界面里配好了 Key、Bot 却读不到」。只留一个出口，避免两处写法漂移。
+    string RioChatDir(){return Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"..","rio-chat"));}
+    string SearchScriptPath(){return Path.Combine(RioChatDir(),"search-key.ps1");}
+    void SearchStatusText(string s,Color c){if(lblSearchStatus!=null){lblSearchStatus.Text=s;lblSearchStatus.ForeColor=c;}}
+    // 只读本机文件并验证能否解密，不联网、不经过 Bot 进程，也绝不显示 Key 本身。
+    void RefreshSearchStatus(){
+        if(lblSearchStatus==null)return;
+        string script=SearchScriptPath();
+        if(!File.Exists(script)){SearchStatusText("联网搜索：未安装",Color.Gray);return;}
+        try{
+            ProcessStartInfo p=new ProcessStartInfo("powershell.exe","-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\" -Status");
+            p.UseShellExecute=false;p.CreateNoWindow=true;p.RedirectStandardOutput=true;p.RedirectStandardError=true;
+            using(Process proc=Process.Start(p)){
+                string output=proc.StandardOutput.ReadToEnd();
+                proc.WaitForExit(10000);
+                if(output.Contains("SEARCH_STATUS:ok"))SearchStatusText("联网搜索：已启用",Color.FromArgb(22,135,72));
+                else if(output.Contains("SEARCH_STATUS:disabled"))SearchStatusText("联网搜索：已关闭",Color.Gray);
+                else if(output.Contains("SEARCH_STATUS:broken"))SearchStatusText("联网搜索：配置损坏",Color.Firebrick);
+                else if(output.Contains("SEARCH_STATUS:none"))SearchStatusText("联网搜索：未配置",Color.FromArgb(196,112,12));
+                else SearchStatusText("联网搜索：状态未知",Color.Gray);
+            }
+        }catch(Exception ex){SearchStatusText("联网搜索：读取失败",Color.Gray);Append("读取搜索配置状态失败："+ex.Message);}
+    }
+    // 设置窗口是独立进程里的 WinForms 对话框，必须 UseShellExecute=true 才会显示出来。
+    // 收尾用 Exited 事件而不是 WaitForExit —— 在 UI 线程上等会冻结界面，窗口重绘不了。
+    void OpenSearchSetup(){
+        string script=SearchScriptPath();
+        if(!File.Exists(script)){MessageBox.Show("找不到搜索设置脚本：\n"+script+"\n\n请确认 EXE 上一级的 rio-chat 目录完整。","搜索设置不可用",MessageBoxButtons.OK,MessageBoxIcon.Warning);return;}
+        try{
+            ProcessStartInfo p=new ProcessStartInfo("powershell.exe","-NoProfile -ExecutionPolicy Bypass -File \""+script+"\"");
+            p.UseShellExecute=true;p.WorkingDirectory=RioChatDir();
+            Process proc=Process.Start(p);
+            if(proc==null)return;
+            proc.EnableRaisingEvents=true;
+            // 回调跑在线程池线程上，必须先 BeginInvoke 回 UI 线程再碰控件
+            proc.Exited+=delegate{try{BeginInvoke(new Action(AfterSearchSetup));}catch{}};
+            Append("已打开 Kimi 搜索设置窗口。Key 用 Windows 当前用户加密存在本机，不写进源码，也不发给聊天模型。");
+        }catch(Exception ex){MessageBox.Show("无法打开搜索设置窗口："+ex.Message,"搜索设置",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+    }
+    // Key 只在聊天启动时读取一次，填完必须重启 Bot 才生效。这一点必须明说，
+    // 否则用户会以为设置没保存成功。
+    void AfterSearchSetup(){
+        RefreshSearchStatus();
+        if(lblSearchStatus.Text.EndsWith("已启用")){
+            bool running=botProcess!=null&&!botProcess.HasExited;
+            Append(running?"搜索配置已保存。Bot 只在启动时读取 Key，请点「停止 Bot」再点「启动 Bot」让它生效。":"搜索配置已保存，下次启动 Bot 时生效。");
+        }else Append("搜索设置窗口已关闭，当前状态："+lblSearchStatus.Text.Replace("联网搜索：","")+"。");
+    }
     void Append(string s){if(txtLog!=null)txtLog.AppendText("["+DateTime.Now.ToString("HH:mm:ss")+"] "+s.Trim()+Environment.NewLine);}
     string DetectProxy(){try{using(RegistryKey k=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Internet Settings")){if(Convert.ToInt32(k.GetValue("ProxyEnable",0))==1){string v=Convert.ToString(k.GetValue("ProxyServer",""));if(!String.IsNullOrWhiteSpace(v))return v.Contains("://")?v:"http://"+v;}}}catch{}return "";}
     void InitTray(){trayMenu=new ContextMenuStrip();ToolStripMenuItem show=new ToolStripMenuItem("显示主窗口");show.Click+=delegate{Restore();};ToolStripMenuItem quit=new ToolStripMenuItem("彻底退出");quit.Click+=delegate{exitRequested=true;Close();};trayMenu.Items.Add(show);trayMenu.Items.Add(quit);tray=new NotifyIcon{Icon=Icon,Text="Takase Bot QQ",ContextMenuStrip=trayMenu,Visible=false};tray.DoubleClick+=delegate{Restore();};}
